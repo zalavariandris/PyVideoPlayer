@@ -11,7 +11,6 @@ import string
 
 import OpenImageIO as oiio
 
-import pyseq
 """ sequence
 getFileNameList: return a list of filesin a folder.
 concatenating sequences like so:

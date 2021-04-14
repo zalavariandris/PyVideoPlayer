@@ -38,7 +38,22 @@ from OpenImageIO import ImageBuf, ImageSpec, ROI, ImageBufAlgo
 
 from invoke_in_main import inmain_later, inmain_decorator
 
+class MyDial(QDial):
+    def __init_(self, parent=None):
+        super().__init_(parent=parent)
+        self.lastValue = None
+        self.lastPos = None
 
+    def mousePressEvent(self, event):
+        self.lastValue = self.value()
+        self.lastPos = event.pos()
+
+    def mouseMoveEvent(self, event):
+        delta = event.pos()-self.lastPos
+        self.setValue(self.lastValue+delta.x())
+
+    def mouseReleaseEvent(self, event):
+        pass
             
 
 def update_gui(state):
@@ -46,7 +61,7 @@ def update_gui(state):
 
 class PyVideoPlayer(QWidget):
     frame_loaded = Signal()
-    state_changed = Signal()
+    state_changed = Signal(dict)
     cache_updated = Signal()
     def __init__(self, parent=None):
         super().__init__(parent=parent)
@@ -290,16 +305,14 @@ class PyVideoPlayer(QWidget):
         
         # emit change signal
         # ------------------
-        self.state_changed.emit()
+        self.state_changed.emit(changes)
 
-    def create_gui(self):
-        # View
+      
+
+    def create_menubar(self):
+        # Actions
         # ----
-        self.setLayout(QVBoxLayout())
-        self.layout().setContentsMargins(0,0,0,0)
-        self.layout().setSpacing(0)
-
-        # Create actions
+         # Create actions
         openAction = QAction("open", self)
         openAction.triggered.connect(self.open)
 
@@ -308,7 +321,6 @@ class PyVideoPlayer(QWidget):
 
         quitAction = QAction("quit", self)
         quitAction.triggered.connect(QApplication.quit)
-
 
         reverse_action = QAction("reverse", self)
         reverse_action.setShortcutContext(Qt.ApplicationShortcut)
@@ -353,12 +365,13 @@ class PyVideoPlayer(QWidget):
 
         fit_action = QAction("fit", self)
         fit_action.triggered.connect(self.fit)
+
         # Menu
         # ----
 
         ## File menu
         self.menuBar = QMenuBar(self)
-        self.layout().addWidget(self.menuBar)
+        
         fileMenu = self.menuBar.addMenu("File")
 
         fileMenu.addAction(openAction)
@@ -380,6 +393,28 @@ class PyVideoPlayer(QWidget):
 
         ## Window menu
         windows_menu = self.menuBar.addMenu("Windows")
+
+        # show hide windows
+        self.show_export_dialog_action = QAction("Export Window")
+        self.show_export_dialog_action.setCheckable(True)
+        def toggle_export_dialog(val):
+            ex = self.state['export']
+            ex.update({'visible': val})
+            self.set_state(export = ex)
+
+        self.show_export_dialog_action.toggled.connect(toggle_export_dialog)
+        windows_menu.addAction(self.show_export_dialog_action)
+
+
+    def create_gui(self):
+        # View
+        # ----
+        self.setLayout(QVBoxLayout())
+        self.layout().setContentsMargins(0,0,0,0)
+        self.layout().setSpacing(0)
+
+        self.create_menubar()
+        self.layout().addWidget(self.menuBar)
 
         # Widgets
         # ------
@@ -437,6 +472,33 @@ class PyVideoPlayer(QWidget):
         slider_controls.layout().setSpacing(0)
         time_controls.layout().addWidget(slider_controls)
 
+        frame_dial = MyDial()
+        frame_dial.setMinimum(-99999)
+        frame_dial.setMaximum(99999)
+        frame_dial.setWrapping(True)
+        frame_dial.setFixedSize(26,26)
+        def update_dial(changes):
+            if 'range' in changes:
+                frame_dial.blockSignals(True)
+                frame_dial.setMinimum(changes['range'][0]-1)
+                frame_dial.setMaximum(changes['range'][1]+1)
+                frame_dial.blockSignals(False)
+
+            if "frame" in changes:
+                frame_dial.blockSignals(True)
+                frame_dial.setValue(changes['frame'])
+                frame_dial.blockSignals(False)
+
+        def scrub_dial(val):
+            # wait for current frame to preload when scrubbing
+            if self.state['playback'] in {"forward","reverse"}:
+                self.set_state(playback="paused")
+            self.scrub_event.wait(0.1) # seconds
+            self.set_state(frame=val)
+        frame_dial.valueChanged.connect(scrub_dial)
+        self.state_changed.connect(update_dial)
+        slider_controls.layout().addWidget(frame_dial)
+
         # time_controls.layout().addSpacing(22)
 
         self.first_frame_spinner = QSpinBox()
@@ -453,13 +515,13 @@ class PyVideoPlayer(QWidget):
         middle.layout().setSpacing(0)
         slider_controls.layout().addWidget(middle)
         self.frame_slider = QSlider(Qt.Horizontal)
-        def scrub(val):
+        def scrub_slider(val):
             # wait for current frame to preload when scrubbing
             if self.state['playback'] in {"forward","reverse"}:
                 self.set_state(playback="paused")
             self.scrub_event.wait(0.1) # seconds
             self.set_state(frame=val)
-        self.frame_slider.valueChanged.connect(scrub)
+        self.frame_slider.valueChanged.connect(scrub_slider)
         middle.layout().addWidget(self.frame_slider)
         self.cacheBar = CacheBar()
         middle.layout().addWidget(self.cacheBar)
@@ -522,7 +584,7 @@ class PyVideoPlayer(QWidget):
         self.pause_btn = QPushButton("||")
         self.pause_btn.setVisible(False)
         self.pause_btn.setFixedWidth(26)
-        self.pause_btn.clicked.connect(lambda: pause_action.trigger())
+        self.pause_btn.clicked.connect(lambda: self.set_state(playback="paused"))
         playback_controls.layout().addWidget(self.pause_btn)
 
         self.step_forward_btn = QPushButton(">|")
@@ -608,17 +670,6 @@ class PyVideoPlayer(QWidget):
 
         self.dialog = QDialog(self)
         self.dialog.setLayout(QVBoxLayout())
-
-        # show hide windows
-        self.show_export_dialog_action = QAction("Export Window")
-        self.show_export_dialog_action.setCheckable(True)
-        def toggle_export_dialog(val):
-            ex = self.state['export']
-            ex.update({'visible': val})
-            self.set_state(export = ex)
-
-        self.show_export_dialog_action.toggled.connect(toggle_export_dialog)
-        windows_menu.addAction(self.show_export_dialog_action)
 
     def toggleFullscreen(self):
         raise NotImplementedError

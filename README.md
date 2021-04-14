@@ -9,7 +9,7 @@ This is a simple work in progress image sequence player built with python3 pysid
 - [x] add zoom and zoom to fit fit
 - [x] zoom around mouse cursor
 - [x] zoom around pinch center
-- [x] reimplement pan, interferes with zoomt around pinch center
+- [x] reimplement pan, interferes with zoom around pinch center
 
 - [x] fix is_sequence when video files eg .mp4 ends with a number
 - [x] Reader class to support sequence starts at non zero
@@ -20,12 +20,17 @@ This is a simple work in progress image sequence player built with python3 pysid
 - [x] add non blobking export with gui
 - [x] dark theme
 - [x] fix first frame number when image sequence starts other than 0
+
+- [ ] frame scrubbing with a frame dial
+- [ ] mark in, out point
+- [ ] create a precise frameslider widget with matching cache bar
+
+
 - [ ] fullscreen
 - [ ] fullscreen scrubbing
 - [ ] support 16 and 32bit image formats
 - [ ] drag and drop
-- [ ] create a precise framespinner widget with matching cache bar
-- [ ] mark in, out point
+
 - [ ] expusure, gamma
 - [ ] LUT
 - [ ] give it a better name : )

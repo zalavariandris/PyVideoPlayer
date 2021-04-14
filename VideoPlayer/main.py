@@ -37,6 +37,7 @@ import OpenImageIO as oiio
 from OpenImageIO import ImageBuf, ImageSpec, ROI, ImageBufAlgo
 
 from invoke_in_main import inmain_later, inmain_decorator
+from utils import on
 
 class MyDial(QDial):
     def __init_(self, parent=None):
@@ -50,15 +51,11 @@ class MyDial(QDial):
 
     def mouseMoveEvent(self, event):
         delta = event.pos()-self.lastPos
-        self.setValue(self.lastValue+delta.x())
+        self.setValue(self.lastValue+delta.x()/10)
 
     def mouseReleaseEvent(self, event):
         pass
             
-
-def update_gui(state):
-    pass
-
 class PyVideoPlayer(QWidget):
     frame_loaded = Signal()
     state_changed = Signal(dict)
@@ -124,8 +121,8 @@ class PyVideoPlayer(QWidget):
         # update video capture
         self.set_state(path=filename)
 
-        # update viewer
-        self.viewer.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+        # # update viewer
+        # self.viewer.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
     def evaluate(self, frame):
         # read file
@@ -260,6 +257,9 @@ class PyVideoPlayer(QWidget):
             # clear cache
             changes['cache'] = dict()
 
+            print("zoom at path change")
+            changes['zoom'] = "fit"
+
         # watch range and set frame
         if 'range' in changes:
             # update frame
@@ -307,8 +307,7 @@ class PyVideoPlayer(QWidget):
         # ------------------
         self.state_changed.emit(changes)
 
-      
-
+    
     def create_menubar(self):
         # Actions
         # ----
@@ -353,6 +352,16 @@ class PyVideoPlayer(QWidget):
                 self.set_state(playback="forward")
         
         self.toggle_play_action.changed.connect(toggle_play)
+
+        @self.state_changed.connect
+        def update_toggle_play_action(changes):
+            if "playback" in changes:
+                is_playing = changes["playback"] in {"forward", "reverse"}
+                if is_playing != self.toggle_play_action.isChecked():
+                    print("update toggle_play", is_playing)
+                    self.toggle_play_action.blockSignals(True)
+                    self.toggle_play_action.setChecked(is_playing)
+                    self.toggle_play_action.blockSignals(True)
 
         clear_cache_action = QAction("clear cache", self)
         clear_cache_action.triggered.connect(lambda: self.set_state(cache=dict()))
@@ -405,6 +414,24 @@ class PyVideoPlayer(QWidget):
         self.show_export_dialog_action.toggled.connect(toggle_export_dialog)
         windows_menu.addAction(self.show_export_dialog_action)
 
+    # def watch(self, *keys):
+    #     pass
+
+    # def on(self, fn):
+    #     from inspect import signature
+    #     keys = [key for key in signature(fn).parameters] 
+    #     print(keys)
+    #     relevant_changes = dict()
+    #     def on_change(changes):
+    #         if any(arg in changes for arg in keys):
+    #             args = [changes.get(key) or self.state[key] for key in keys]
+    #             fn(*args)
+    #             # print(args)
+    #             # fn(frame=100, zoom=50)
+    #             # wrap(**relevant_changes)
+    #             # print("stte changed:", ", ".join(["{}: {}".format(key, val) for key, val in relevant_changes.items()]))
+
+    #     self.state_changed.connect(on_change)
 
     def create_gui(self):
         # View
@@ -418,7 +445,6 @@ class PyVideoPlayer(QWidget):
 
         # Widgets
         # ------
-        
         # Viewer toolbar
         viewer_toolbar = QWidget()
         viewer_toolbar.setLayout(QHBoxLayout())
@@ -439,6 +465,13 @@ class PyVideoPlayer(QWidget):
         self.zoom_combo.setEditable(True)
         self.zoom_combo.currentTextChanged.connect(lambda text: self.set_state(zoom=int(text[:-1])/100 if text[:-1].isnumeric() else text))
         viewer_toolbar.layout().addWidget(self.zoom_combo)
+        @self.state_changed.connect
+        def update_zoom_combo(changes):
+            if 'zoom' in changes:
+                zoom_text = "{:.0f}%".format(self.state['zoom']*100) if isinstance(self.state['zoom'], numbers.Number) else self.state['zoom']
+                self.zoom_combo.blockSignals(True)
+                self.zoom_combo.setCurrentText(zoom_text)
+                self.zoom_combo.blockSignals(False)
 
         viewer_toolbar.layout().addStretch()
 
@@ -454,7 +487,23 @@ class PyVideoPlayer(QWidget):
         self.resolution_textitem = QGraphicsTextItem()
         self.resolution_textitem.setFlags(QGraphicsItem.ItemIgnoresTransformations) 
         self.scene.addItem(self.resolution_textitem)
+
         
+        @self.state_changed.connect
+        def update_viewer_zoom(changes):
+            if 'zoom' in changes:
+                if changes['zoom'] == "fit":
+                    self.viewer.fitInView(self.pix.boundingRect(), Qt.KeepAspectRatio)
+
+                elif self.viewer.zoom() != changes['zoom']:
+                    if isinstance(changes['zoom'], numbers.Number):
+                        self.viewer.blockSignals(True)
+                        self.viewer.setZoom(changes['zoom'])
+                        self.viewer.blockSignals(False)
+
+            if 'image' in changes and changes['image'] is not None and self.state['zoom'] == "fit":
+                h, w, c = changes['image'].shape
+                self.viewer.fitInView(QRect(0,0,w,h), Qt.KeepAspectRatio)
 
         self.layout().addWidget(self.viewer)
 
@@ -475,8 +524,19 @@ class PyVideoPlayer(QWidget):
         frame_dial = MyDial()
         frame_dial.setMinimum(-99999)
         frame_dial.setMaximum(99999)
-        frame_dial.setWrapping(True)
+        # frame_dial.setWrapping(True) # seem to crash when?
         frame_dial.setFixedSize(26,26)
+
+        @frame_dial.valueChanged.connect
+        def scrub_frame(val):
+            # wait for current frame to preload when scrubbing
+            print("scrub dial")
+            if self.state['playback'] in {"forward","reverse"}:
+                self.set_state(playback="paused")
+            self.scrub_event.wait(0.1) # seconds
+            self.set_state(frame=val)
+
+        @self.state_changed.connect
         def update_dial(changes):
             if 'range' in changes:
                 frame_dial.blockSignals(True)
@@ -484,54 +544,87 @@ class PyVideoPlayer(QWidget):
                 frame_dial.setMaximum(changes['range'][1]+1)
                 frame_dial.blockSignals(False)
 
-            if "frame" in changes:
+            if 'frame' in changes:
                 frame_dial.blockSignals(True)
                 frame_dial.setValue(changes['frame'])
                 frame_dial.blockSignals(False)
 
-        def scrub_dial(val):
-            # wait for current frame to preload when scrubbing
-            if self.state['playback'] in {"forward","reverse"}:
-                self.set_state(playback="paused")
-            self.scrub_event.wait(0.1) # seconds
-            self.set_state(frame=val)
-        frame_dial.valueChanged.connect(scrub_dial)
-        self.state_changed.connect(update_dial)
         slider_controls.layout().addWidget(frame_dial)
 
-        # time_controls.layout().addSpacing(22)
-
         self.first_frame_spinner = QSpinBox()
-
         self.first_frame_spinner.setMinimum(-999999)
         self.first_frame_spinner.setMaximum(+999999)
         self.first_frame_spinner.setToolTip("first frame")
         slider_controls.layout().addWidget(self.first_frame_spinner)
-        self.first_frame_spinner.valueChanged.connect(lambda val: self.set_state(range=(int(val), self.state['range'][1])))
+        @self.first_frame_spinner.valueChanged.connect
+        def update_range(val):
+            self.set_state(range=(int(val), self.state['range'][1]))
+
+        @self.state_changed.connect
+        def _(changes):
+            if 'range' in changes:
+                self.first_frame_spinner.blockSignals(True)
+                self.first_frame_spinner.setValue(changes['range'][0])
+                self.first_frame_spinner.blockSignals(False)
 
         middle = QWidget()
         middle.setLayout(QVBoxLayout())
         middle.layout().setContentsMargins(16,0,16,0)
         middle.layout().setSpacing(0)
         slider_controls.layout().addWidget(middle)
+
         self.frame_slider = QSlider(Qt.Horizontal)
+        @self.frame_slider.valueChanged.connect
         def scrub_slider(val):
             # wait for current frame to preload when scrubbing
             if self.state['playback'] in {"forward","reverse"}:
                 self.set_state(playback="paused")
             self.scrub_event.wait(0.1) # seconds
             self.set_state(frame=val)
-        self.frame_slider.valueChanged.connect(scrub_slider)
+
+        @self.state_changed.connect
+        def update_slider(changes):
+            if 'range' in changes:
+                self.frame_slider.blockSignals(True)
+                self.frame_slider.setMinimum(changes['range'][0])
+                self.frame_slider.setMaximum(changes['range'][1])
+                self.frame_slider.blockSignals(False)
+
+            if 'frame' in changes:
+                self.frame_slider.blockSignals(True)
+                self.frame_slider.setValue(changes['frame'])
+                self.frame_slider.blockSignals(False)
+
+
         middle.layout().addWidget(self.frame_slider)
         self.cacheBar = CacheBar()
         middle.layout().addWidget(self.cacheBar)
+
+        @self.state_changed.connect
+        def update_cachebar(changes):
+            if 'range' in changes:
+                print("update cache bar range")
+                self.cacheBar.setRange(*changes['range'])
+                
+            if 'cache' in changes:
+                self.cacheBar.setValues([val for val in changes['cache'].keys() ])
+
 
         self.last_frame_spinner = QSpinBox()
         self.last_frame_spinner.setMinimum(-999999)
         self.last_frame_spinner.setMaximum(+999999)
         self.last_frame_spinner.setToolTip("last frame")
         slider_controls.layout().addWidget(self.last_frame_spinner)
-        self.last_frame_spinner.valueChanged.connect(lambda val: self.set_state(range=(self.state['range'][0], int(val))))
+        @self.last_frame_spinner.valueChanged.connect
+        def update_last_frame(val):
+            self.set_state(range=(self.state['range'][0], int(val)))
+
+        @self.state_changed.connect
+        def update_last_frame_spinner(changes):
+            if 'range' in changes:
+                self.last_frame_spinner.blockSignals(True)
+                self.last_frame_spinner.setValue(changes['range'][1])
+                self.last_frame_spinner.blockSignals(False)
 
         playback_controls = QWidget()
         playback_controls.setLayout(QHBoxLayout())
@@ -545,6 +638,13 @@ class PyVideoPlayer(QWidget):
         self.fps_spinner.setToolTip("fps")
         self.fps_spinner.setSuffix("fps")
         self.fps_spinner.valueChanged.connect(lambda val: self.set_state(fps=val))
+        @self.state_changed.connect
+        def update_fps_spinner(changes):
+            if 'fps' in changes:
+                self.fps_spinner.blockSignals(True)
+                self.fps_spinner.setValue(changes['fps'] or 0)
+                self.fps_spinner.blockSignals(False)
+
         playback_controls.layout().addWidget(self.fps_spinner)
 
         self.skip_to_start_btn = QPushButton("|<<")
@@ -559,14 +659,21 @@ class PyVideoPlayer(QWidget):
 
         self.reverse_btn = QPushButton("\u23F4")
         self.reverse_btn.setFixedWidth(26)
-        self.reverse_btn.clicked.connect(lambda: self.set_state(playback="reverse"))
-        playback_controls.layout().addWidget(self.reverse_btn)
+        @self.reverse_btn.clicked.connect
+        def toggle_reverse():
+            if self.state['playback'] == "reverse":
+                self.set_state(playback="paused")
+            else:
+                self.set_state(playback="reverse")
 
-        self.reverse_pause_btn = QPushButton("||")
-        self.reverse_pause_btn.setVisible(False)
-        self.reverse_pause_btn.setFixedWidth(26)
-        self.reverse_pause_btn.clicked.connect(lambda: self.set_state(playback="paused"))
-        playback_controls.layout().addWidget(self.reverse_pause_btn)
+        @self.state_changed.connect
+        def update_reverse_btn(changes):
+            if 'playback' in changes:
+                if self.state['playback']!="reverse":
+                    self.reverse_btn.setText("<")
+                else:
+                    self.reverse_btn.setText("||")
+        playback_controls.layout().addWidget(self.reverse_btn)
 
         self.frame_spinner = QSpinBox()
         self.frame_spinner.setAlignment(Qt.AlignHCenter)
@@ -574,18 +681,35 @@ class PyVideoPlayer(QWidget):
         self.frame_spinner.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.frame_spinner.setToolTip("current frame")
         self.frame_spinner.valueChanged.connect(lambda val: self.set_state(frame=val, playback="paused"))
+        @self.state_changed.connect
+        def update_frame_spinner(changes):
+            self.frame_spinner.blockSignals(True)
+            if 'range' in changes:
+                self.frame_spinner.setMinimum(changes['range'][0])
+                self.frame_spinner.setMaximum(changes['range'][1])
+
+            if 'frame' in changes:
+                self.frame_spinner.setValue(changes['frame'])
+            self.frame_spinner.blockSignals(False)
         playback_controls.layout().addWidget(self.frame_spinner)
 
         self.forward_btn = QPushButton("\u23F5")
         self.forward_btn.setFixedWidth(26)
-        self.forward_btn.clicked.connect(lambda: self.set_state(playback="forward"))
-        playback_controls.layout().addWidget(self.forward_btn)
+        @self.forward_btn.clicked.connect
+        def togfle_forward():
+            if self.state['playback'] == "forward":
+                self.set_state(playback="paused")
+            else:
+                self.set_state(playback="forward")
 
-        self.pause_btn = QPushButton("||")
-        self.pause_btn.setVisible(False)
-        self.pause_btn.setFixedWidth(26)
-        self.pause_btn.clicked.connect(lambda: self.set_state(playback="paused"))
-        playback_controls.layout().addWidget(self.pause_btn)
+        @self.state_changed.connect
+        def update_forward_btn(changes):
+            if 'playback' in changes:
+                if self.state['playback']!="forward":
+                    self.forward_btn.setText(">")
+                else:
+                    self.forward_btn.setText("||")
+        playback_controls.layout().addWidget(self.forward_btn)
 
         self.step_forward_btn = QPushButton(">|")
         self.step_forward_btn.setFixedWidth(26)
@@ -597,7 +721,7 @@ class PyVideoPlayer(QWidget):
         playback_controls.layout().addWidget(self.skip_to_end_btn)
         self.skip_to_end_btn.clicked.connect(lambda: self.set_state(frame=self.state['range'][1]))
 
-        for btn in [self.skip_to_start_btn, self.step_back_btn, self.reverse_pause_btn, self.reverse_btn, self.forward_btn, self.pause_btn, self.step_forward_btn, self.skip_to_end_btn]:
+        for btn in [self.skip_to_start_btn, self.step_back_btn, self.reverse_btn, self.forward_btn, self.step_forward_btn, self.skip_to_end_btn]:
             btn.setFlat(True)
 
         # playback_controls.layout().addStretch()
@@ -612,6 +736,11 @@ class PyVideoPlayer(QWidget):
         self.oscilloscope.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         self.oscilloscope.resize(100,10)
 
+        @self.state_changed.connect
+        def update_oscilloscope(changes):
+            if 'fps' in changes:
+                self.oscilloscope.setMaximum(changes['fps']*2 if changes['fps'] else 120)
+
         print("!!!!!!!!!", self.oscilloscope.size())
 
         self.statusbar = QStatusBar()
@@ -619,22 +748,46 @@ class PyVideoPlayer(QWidget):
 
         self.system_memory_label = QLabel("system memory")
         self.statusbar.addPermanentWidget(self.system_memory_label)
+        @self.state_changed.connect
+        def update_system_memory_label(changes):
+            if 'cache' in changes:
+                total_memory = psutil.virtual_memory().total / (1024.0 ** 3)
+                available_memory = psutil.virtual_memory().available / (1024.0 ** 3)
+                system_memory_text = "system: {:.2f}/{:.2f}GB ".format(available_memory, total_memory)
+
+                self.system_memory_label.setText(system_memory_text)
 
         self.path_label = QLabel()
         self.statusbar.addPermanentWidget(self.path_label)
+        @self.state_changed.connect
+        def _(changes):
+            if 'path' in changes:
+                self.path_label.setText(changes['path'])
 
         # memory
         self.memory_label = QLabel("memory")
+        @self.state_changed.connect
+        def _(changes):
+            if 'memory' in changes:
+                memory_text = "{:.0f}MB /".format(self.state['memory'])
+                self.memory_label.setText(memory_text)
+
         # self.memory_label.setFixedWidth(100)
         self.memory_spinner = QSpinBox()
         self.memory_spinner.setStyleSheet("QSpinBox{background-color:transparent}")
         self.memory_spinner.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.memory_spinner.setSuffix("MB")
         self.memory_spinner.setFrame(False)
+        self.memory_spinner.valueChanged.connect(lambda val: self.set_state(memory_limit=val))
         self.memory_spinner.setMinimum(0)
         self.memory_spinner.setMaximum(99999)
-        self.memory_spinner.valueChanged.connect(lambda val: self.set_state(memory_limit=val))
-
+        self.memory_spinner.setValue(self.state['memory_limit'])
+        @self.state_changed.connect
+        def _(changes):
+            if 'memory_limit' in changes:
+                self.memory_spinner.blockSignals(True)
+                self.memory_spinner.setValue(changes['memory_limit'])
+                self.memory_spinner.blockSignals(False)
 
         memory_controls = QWidget()
         memory_controls.setLayout(QHBoxLayout())
@@ -667,6 +820,34 @@ class PyVideoPlayer(QWidget):
                 self.set_state(frame=frame)
 
         self.timer.timeout.connect(next_frame)
+        # update timer interval based on fps
+        # @self.state_changed.connect
+        # def update_timer(changes):
+        #     if any(key in changes for key in ['fps', 'playback', 'cache']):
+        #         playback = changes.get('playback', self.state['playback'])
+        #         fps = changes.get('fps', self.state['fps'])
+        #         cache = changes.get('cache', self.state['cache'])
+        #         print(changes.get('frame'))
+        #         frame = changes.get('frame', self.state['frame'])
+        #         print(frame, self.state['frame'])
+
+        #         interval = 1000/fps if fps else 0
+        #         if self.timer.interval() != interval:
+        #             self.timer.setInterval(interval)
+
+        #         # start/stop timer
+        #         if playback in {"forward", "reverse"}:
+        #             if frame not in cache:
+        #                 if self.timer.isActive():
+        #                     self.timer.stop()
+
+        #             if frame in cache:
+        #                 if not self.timer.isActive():
+        #                     self.timer.start(1000/fps if fps else 0)
+
+        #         elif self.state['playback'] == "paused":
+        #             if self.timer.isActive():
+        #                 self.timer.stop()
 
         self.dialog = QDialog(self)
         self.dialog.setLayout(QVBoxLayout())
@@ -686,9 +867,9 @@ class PyVideoPlayer(QWidget):
 
     def update_gui(self):
         # print("update gui")
-        ImageChanged = self.state['image'] is not None and self._image_buffer is not self.state['image']
+        IsNewImage = self.state['image'] is not None and self._image_buffer is not self.state['image']
         
-        if ImageChanged:
+        if IsNewImage:
             self._image_buffer = self.state['image']
             self._image_buffer.flags.writeable = False
             # IsEqual = str(self._image_buffer) == str(self.state['image'])
@@ -711,129 +892,124 @@ class PyVideoPlayer(QWidget):
         # else:
         #     self.export_dialog.hide()
 
-        if self.path_label.text() != self.state['path']:
-            self.path_label.setText(self.state['path'])
+        # if self.path_label.text() != self.state['path']:
+        #     self.path_label.setText(self.state['path'])
 
-        if self.fps_spinner.value() != self.state['fps']:
-            self.fps_spinner.blockSignals(True)
-            self.fps_spinner.setValue(self.state['fps'] or 0)
-            self.fps_spinner.blockSignals(False)
+        # if self.fps_spinner.value() != self.state['fps']:
+        #     self.fps_spinner.blockSignals(True)
+        #     self.fps_spinner.setValue(self.state['fps'] or 0)
+        #     self.fps_spinner.blockSignals(False)
 
-        if self.memory_spinner.value() != self.state['memory_limit']:
-            self.memory_spinner.blockSignals(True)
-            self.memory_spinner.setValue(self.state['memory_limit'])
-            self.memory_spinner.blockSignals(False)
+        # if self.memory_spinner.value() != self.state['memory_limit']:
+        #     self.memory_spinner.blockSignals(True)
+        #     self.memory_spinner.setValue(self.state['memory_limit'])
+        #     self.memory_spinner.blockSignals(False)
 
-        if self.frame_slider.value() != self.state['frame']:
-            self.frame_slider.blockSignals(True)
-            self.frame_slider.setValue(self.state['frame'])
-            self.frame_slider.blockSignals(False)
+        # if self.frame_slider.value() != self.state['frame']:
+        #     self.frame_slider.blockSignals(True)
+        #     self.frame_slider.setValue(self.state['frame'])
+        #     self.frame_slider.blockSignals(False)
 
-        if (self.frame_slider.minimum(), self.frame_slider.maximum()) != self.state['range']:
-            self.frame_slider.blockSignals(True)
-            self.frame_slider.setMinimum(self.state['range'][0])
-            self.frame_slider.setMaximum(self.state['range'][1])
-            self.frame_slider.blockSignals(False)
+        # if (self.frame_slider.minimum(), self.frame_slider.maximum()) != self.state['range']:
+        #     self.frame_slider.blockSignals(True)
+        #     self.frame_slider.setMinimum(self.state['range'][0])
+        #     self.frame_slider.setMaximum(self.state['range'][1])
+        #     self.frame_slider.blockSignals(False)
 
-        if self.frame_spinner.value() != self.state['frame']:
-            self.frame_spinner.blockSignals(True)
-            self.frame_spinner.setValue(self.state['frame'])
-            self.frame_spinner.blockSignals(False)
+        # if self.frame_spinner.value() != self.state['frame']:
+        #     self.frame_spinner.blockSignals(True)
+        #     self.frame_spinner.setValue(self.state['frame'])
+        #     self.frame_spinner.blockSignals(False)
 
-        if (self.frame_spinner.minimum(), self.frame_spinner.maximum()) != self.state['range']:
-            self.frame_spinner.blockSignals(True)
-            self.frame_spinner.setMinimum(self.state['range'][0])
-            self.frame_spinner.setMaximum(self.state['range'][1])
-            self.frame_spinner.blockSignals(False)
+        # if (self.frame_spinner.minimum(), self.frame_spinner.maximum()) != self.state['range']:
+        #     self.frame_spinner.blockSignals(True)
+        #     self.frame_spinner.setMinimum(self.state['range'][0])
+        #     self.frame_spinner.setMaximum(self.state['range'][1])
+        #     self.frame_spinner.blockSignals(False)
 
-        if self.first_frame_spinner.value() != self.state['range'][0]:
-            self.first_frame_spinner.blockSignals(True)
-            self.first_frame_spinner.setValue(self.state['range'][0])
-            self.first_frame_spinner.blockSignals(False)
+        # if self.first_frame_spinner.value() != self.state['range'][0]:
+        #     self.first_frame_spinner.blockSignals(True)
+        #     self.first_frame_spinner.setValue(self.state['range'][0])
+        #     self.first_frame_spinner.blockSignals(False)
 
-        if self.last_frame_spinner.value() != self.state['range'][1]:
-            self.last_frame_spinner.blockSignals(True)
-            self.last_frame_spinner.setValue(self.state['range'][1])
-            self.last_frame_spinner.blockSignals(False)
+        # if self.last_frame_spinner.value() != self.state['range'][1]:
+        #     self.last_frame_spinner.blockSignals(True)
+        #     self.last_frame_spinner.setValue(self.state['range'][1])
+        #     self.last_frame_spinner.blockSignals(False)
 
-        if self.cacheBar.range() != self.state['range']:
-            self.cacheBar.setRange(*self.state['range'])
+        # if self.cacheBar.range() != self.state['range']:
+        #     self.cacheBar.setRange(*self.state['range'])
             
-        if self.cacheBar.values() != self.state['cache'].keys():
-            self.cacheBar.setValues([val for val in self.state['cache'].keys() ])
+        # if self.cacheBar.values() != self.state['cache'].keys():
+        #     self.cacheBar.setValues([val for val in self.state['cache'].keys() ])
 
-        if (self.state["playback"] == "forward") != self.toggle_play_action.isChecked():
-            self.toggle_play_action.blockSignals(True)
-            self.toggle_play_action.setChecked(self.state["playback"] == "forward")
-            self.toggle_play_action.blockSignals(True)
+        # if self.state["playback"] == "forward":
+        #     if not self.pause_btn.isVisible():
+        #         self.pause_btn.setVisible(True)
+        #     if self.forward_btn.isVisible():
+        #         self.forward_btn.setVisible(False)
+        # else:
+        #     if self.pause_btn.isVisible():
+        #         self.pause_btn.setVisible(False)
+        #     if not self.forward_btn.isVisible():
+        #         self.forward_btn.setVisible(True)
 
-        if self.state["playback"] == "forward":
-            if not self.pause_btn.isVisible():
-                self.pause_btn.setVisible(True)
-            if self.forward_btn.isVisible():
-                self.forward_btn.setVisible(False)
-        else:
-            if self.pause_btn.isVisible():
-                self.pause_btn.setVisible(False)
-            if not self.forward_btn.isVisible():
-                self.forward_btn.setVisible(True)
+        # if self.state["playback"] == "reverse":
+        #     if not self.reverse_pause_btn.isVisible():
+        #         self.reverse_pause_btn.setVisible(True)
+        #     if self.reverse_btn.isVisible():
+        #         self.reverse_btn.setVisible(False)
+        # else:
+        #     if self.reverse_pause_btn.isVisible():
+        #         self.reverse_pause_btn.setVisible(False)
+        #     if not self.reverse_btn.isVisible():
+        #         self.reverse_btn.setVisible(True)
 
-        if self.state["playback"] == "reverse":
-            if not self.reverse_pause_btn.isVisible():
-                self.reverse_pause_btn.setVisible(True)
-            if self.reverse_btn.isVisible():
-                self.reverse_btn.setVisible(False)
-        else:
-            if self.reverse_pause_btn.isVisible():
-                self.reverse_pause_btn.setVisible(False)
-            if not self.reverse_btn.isVisible():
-                self.reverse_btn.setVisible(True)
+        # high = self.state['fps']*2 if self.state['fps'] else 120
+        # if self.oscilloscope.maximum() != high:
+        #     self.oscilloscope.setMaximum(high)
 
-        high = self.state['fps']*2 if self.state['fps'] else 120
-        if self.oscilloscope.maximum() != high:
-            self.oscilloscope.setMaximum(high)
-
-        if ImageChanged:
+        if IsNewImage:
             # update viewer image
             height, width, channel = self.state['image'].shape
             bytesPerLine = 3 * width
             qImg = QImage(self.state['image'].data, width, height, bytesPerLine, QImage.Format_RGB888)
             self.pix.setPixmap(QPixmap(qImg))
 
-        if ImageChanged:
+        if IsNewImage:
             # update resolution label
             self.resolution_label.setText("{}x{}".format(width, height))
 
             self.resolution_textitem.setPos(width, height)
             self.resolution_textitem.setPlainText("{}x{}".format(width, height))
 
-        if self.state['zoom'] == "fit":
-            self.viewer.fitInView(self.pix.boundingRect(), Qt.KeepAspectRatio)
+        # if self.state['zoom'] == "fit":
+        #     self.viewer.fitInView(self.pix.boundingRect(), Qt.KeepAspectRatio)
 
-        elif self.viewer.zoom() != self.state['zoom']:
-            # print("change zoom:", self.viewer.zoom(), self.state['zoom'])
-            if isinstance(self.state['zoom'], numbers.Number):
-                self.viewer.blockSignals(True)
-                self.viewer.setZoom(self.state['zoom'])
-                self.viewer.blockSignals(False)
+        # elif self.viewer.zoom() != self.state['zoom']:
+        #     # print("change zoom:", self.viewer.zoom(), self.state['zoom'])
+        #     if isinstance(self.state['zoom'], numbers.Number):
+        #         self.viewer.blockSignals(True)
+        #         self.viewer.setZoom(self.state['zoom'])
+        #         self.viewer.blockSignals(False)
 
-        memory_text = "{:.0f}MB /".format(self.state['memory'])
-        if self.memory_label.text() != memory_text:
-            self.memory_label.setText(memory_text)
+        # memory_text = "{:.0f}MB /".format(self.state['memory'])
+        # if self.memory_label.text() != memory_text:
+        #     self.memory_label.setText(memory_text)
 
-        zoom_text = "{:.0f}%".format(self.state['zoom']*100) if isinstance(self.state['zoom'], numbers.Number) else self.state['zoom']
-        if self.zoom_combo.currentText() != zoom_text:
-            self.zoom_combo.blockSignals(True)
-            self.zoom_combo.setCurrentText(zoom_text)
-            self.zoom_combo.blockSignals(False)
+        # zoom_text = "{:.0f}%".format(self.state['zoom']*100) if isinstance(self.state['zoom'], numbers.Number) else self.state['zoom']
+        # if self.zoom_combo.currentText() != zoom_text:
+        #     self.zoom_combo.blockSignals(True)
+        #     self.zoom_combo.setCurrentText(zoom_text)
+        #     self.zoom_combo.blockSignals(False)
 
-        total_memory = psutil.virtual_memory().total / (1024.0 ** 3)
-        available_memory = psutil.virtual_memory().available / (1024.0 ** 3)
-        system_memory_text = "system: {:.2f}/{:.2f}GB ".format(available_memory, total_memory)
-        if self.system_memory_label.text() != system_memory_text:
-            self.system_memory_label.setText(system_memory_text)
+        # total_memory = psutil.virtual_memory().total / (1024.0 ** 3)
+        # available_memory = psutil.virtual_memory().available / (1024.0 ** 3)
+        # system_memory_text = "system: {:.2f}/{:.2f}GB ".format(available_memory, total_memory)
+        # if self.system_memory_label.text() != system_memory_text:
+        #     self.system_memory_label.setText(system_memory_text)
 
-        if ImageChanged:
+        if IsNewImage:
             # update fps counter
             timestamp = datetime.now()
             if self.last_timestamp:
@@ -845,6 +1021,7 @@ class PyVideoPlayer(QWidget):
             self.last_timestamp = timestamp
 
         # watch playback and start or stop timer
+        # redundant see later
         if self.state['playback'] in {"forward", "reverse"}:
             if not self.timer.isActive():
                 print("restart timer!", datetime.now())
@@ -863,14 +1040,17 @@ class PyVideoPlayer(QWidget):
         if self.state['playback'] in {"forward", "reverse"}:
             if self.state['frame'] not in self.state['cache']:
                 if self.timer.isActive():
+                    print("pause timer 2")
                     self.timer.stop()
 
             if self.state['frame'] in self.state['cache']:
                 if not self.timer.isActive():
+                    print("resume timer 2")
                     self.timer.start(1000/self.state['fps'] if self.state['fps'] else 0)
 
         elif self.state['playback'] == "paused":
             if self.timer.isActive():
+                print("stop timer 2")
                 self.timer.stop()
 
     def resizeEvent(self, event):
@@ -908,8 +1088,8 @@ if __name__ == "__main__":
         window.open(sys.argv[1])
     else:
         pass
-        window.open("../tests/MASA_sequence/MASA_sequence_00196.jpg")
-        # window.open("../tests/Mása - becsukjuk, nem latszik.mp4")
+        # window.open("../tests/MASA_sequence/MASA_sequence_00196.jpg")
+        window.open("../tests/Mása - becsukjuk, nem latszik.mp4")
         # window.open("R:/Frank/Preview/Andris/EF_VFX_04_MERGE_v56.mp4")
         # window.open("E:/_PREVIEW/EF_VFX_04_MERGE_v45/EF_VFX_04_MERGE_v45_93820.jpg")
         # window.open("E:/localize/EF_VFX_04/EF_VFX_04_0093230.dpx")

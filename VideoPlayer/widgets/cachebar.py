@@ -48,6 +48,7 @@ class CacheBar(QWidget):
         print("range", start, end)
         self._start = start
         self._end = end
+        self.update()
 
     def range(self):
         return (self._start, self._end)

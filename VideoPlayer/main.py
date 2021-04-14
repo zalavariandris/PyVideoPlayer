@@ -414,6 +414,15 @@ class PyVideoPlayer(QWidget):
         self.show_export_dialog_action.toggled.connect(toggle_export_dialog)
         windows_menu.addAction(self.show_export_dialog_action)
 
+        @self.state_changed.connect
+        def update_export_dialog(changes):
+            if 'export' in changes:
+                if not self.export_dialog.isVisible() and self.state['export']['filename']:
+                    self.export_dialog.show()
+
+                if self.export_dialog.isVisible():
+                    self.export_progress.setValue(self.state['export']['progress'])
+
     # def watch(self, *keys):
     #     pass
 
@@ -877,13 +886,7 @@ class PyVideoPlayer(QWidget):
             # print( IsSame, IsEqual)
 
         # update gui
-        if not self.export_dialog.isVisible() and self.state['export']['filename']:
-            self.export_dialog.show()
-            # print("export dialog not visible")
 
-        else:
-            if self.export_progress.value() != self.state['export']['progress']:
-                self.export_progress.setValue(self.state['export']['progress'])
 
         # if self.state['export']['filename'] and not self.export_dialog.isVisible():
         #     if self.export_dialog

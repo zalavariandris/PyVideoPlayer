@@ -23,15 +23,6 @@ import psutil
 
 from threading import Event, Thread
 
-def setInterval(interval, func, *asrgs):
-    stopped = Event()
-    def loop():
-        while not stopped.wait(interval): # the first call is in `interval` secs
-            func(*args)
-    Thread(target=loop).start()    
-    return stopped.set
-
-
 from reader import Reader
 import OpenImageIO as oiio
 from OpenImageIO import ImageBuf, ImageSpec, ROI, ImageBufAlgo
@@ -55,6 +46,70 @@ class MyDial(QDial):
 
     def mouseReleaseEvent(self, event):
         pass
+
+class Viewer2D(Viewer2D):
+    valueChanged = Signal(int)
+    minimumChanged = Signal(int)
+    maximumChanged = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+
+        self._value = 0
+        self._minimum = 0
+        self._maximum = 99
+
+        self._is_scrubbing = False
+        self._last_pos = None
+        self._last_value = None
+
+    def minimum(self):
+        return self._minimum
+
+    def setMinimum(self, val):
+        self._minimum = val
+        self.minimumChanged.emit(val)
+
+    def maximum(self):
+        return self._maximum
+
+    def setMaximum(self, val):
+        self._maximum = val
+        self.maximumChanged.emit(val)
+
+    def value(self):
+        return self._value
+
+    def setValue(self, val):
+        if val < self._minimum or val > self._maximum:
+            return
+        self._value = val
+        self.valueChanged.emit(val)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            self._last_pos = event.pos()
+            self._last_value = self._value
+            self._is_scrubbing = True
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._is_scrubbing:
+            delta = event.pos() - self._last_pos
+            value = self._last_value + int(delta.x()/10)
+            self.setValue(value)
+            print("scrub", value)
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._is_scrubbing:
+            self._is_scrubbing = False
+        else:
+            super().mouseReleaseEvent(event)
+
+
             
 class PyVideoPlayer(QWidget):
     frame_loaded = Signal()
@@ -488,7 +543,7 @@ class PyVideoPlayer(QWidget):
         self.viewer = Viewer2D()
         self.scene = QGraphicsScene()
         self.viewer.setScene(self.scene)
-        self.viewer.zoomChanged.connect(lambda: self.set_state(zoom=self.viewer.zoom()))
+        
 
         self.pix = QGraphicsPixmapItem()
         self.scene.addItem(self.pix)
@@ -497,6 +552,15 @@ class PyVideoPlayer(QWidget):
         self.resolution_textitem.setFlags(QGraphicsItem.ItemIgnoresTransformations) 
         self.scene.addItem(self.resolution_textitem)
 
+        self.viewer.zoomChanged.connect(lambda: self.set_state(zoom=self.viewer.zoom()))
+        @self.viewer.valueChanged.connect
+        def scrub_frame(val):
+            # wait for current frame to preload when scrubbing
+            print("scrub viewer")
+            if self.state['playback'] in {"forward","reverse"}:
+                self.set_state(playback="paused")
+            self.scrub_event.wait(0.1) # seconds
+            self.set_state(frame=val)
         
         @self.state_changed.connect
         def update_viewer_zoom(changes):
@@ -513,6 +577,19 @@ class PyVideoPlayer(QWidget):
             if 'image' in changes and changes['image'] is not None and self.state['zoom'] == "fit":
                 h, w, c = changes['image'].shape
                 self.viewer.fitInView(QRect(0,0,w,h), Qt.KeepAspectRatio)
+
+        @self.state_changed.connect
+        def update_viewer_value(changes):
+            if 'range' in changes:
+                self.viewer.blockSignals(True)
+                self.viewer.setMinimum(changes['range'][0])
+                self.viewer.setMaximum(changes['range'][1])
+                self.viewer.blockSignals(False)
+
+            if 'frame' in changes:
+                self.viewer.blockSignals(True)
+                self.viewer.setValue(changes['frame'])
+                self.viewer.blockSignals(False)
 
         self.layout().addWidget(self.viewer)
 

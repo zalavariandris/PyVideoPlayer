@@ -4,7 +4,7 @@ from PySide6.QtGui import *
 import sys
 
 class Viewer2D(QGraphicsView):
-    zoomChanged = Signal()
+    zoomChanged = Signal(float)
     def __init__(self, parent=None):
         super().__init__(parent)
         
@@ -47,7 +47,7 @@ class Viewer2D(QGraphicsView):
         delta = newPos - oldPos
         self.translate(delta.x(), delta.y())
 
-        self.zoomChanged.emit()
+        self.zoomChanged.emit(value)
 
     def event(self, event):
         if event.type() == QEvent.Gesture:
@@ -98,7 +98,7 @@ class Viewer2D(QGraphicsView):
         # print("delta", delta)
         self.translate(delta.x(), delta.y())
         # move scene to oldPosition
-        self.zoomChanged.emit()
+        self.zoomChanged.emit(self.zoom())
 
 
     def drawBackground(self, painter, rect):
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     import sys, os
     app = QApplication(sys.argv)
     window = Viewer2D()
-    window.zoomChanged.connect(lambda: print("zoom changed:", window.zoom()))
+    window.zoomChanged.connect(lambda val: print("zoom changed:", val))
     window.show()
     app.exec_()
     os._exit(0)

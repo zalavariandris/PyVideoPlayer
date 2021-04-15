@@ -208,6 +208,7 @@ class Handle(Element):
         super(Handle, self).__init__(parent, main)
         
     def drawText(self, event, qp):
+        return
         qp.setPen(self.textColor())
         qp.setFont(QFont('Arial', 10))
         qp.drawText(event.rect(), Qt.AlignLeft, str(self.main.start()))

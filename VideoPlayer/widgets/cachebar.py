@@ -2,6 +2,8 @@ from PySide6.QtWidgets import *
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 
+from utils import get_ranges
+
 class CacheBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
@@ -19,16 +21,34 @@ class CacheBar(QWidget):
 
         # draw ticks
         tick_color = self.palette().highlight().color()
-        painter.setPen(QPen(tick_color, 1.0))
+        
         # painter.setBrush(tick_color)
 
-        for pos in self._values:
+        ranges = [r for r in get_ranges(self._values)]
+        # print(ranges)
+
+        def get_x(pos):
             x = pos-self._start
             x/=self._end-self._start
             x*=self.width()-padding*2
             x+=padding
-            # painter.drawRect(x,0,tick_width, self.height())
-            painter.drawLine(x, 0, x, self.height())
+            return x
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(tick_color)
+
+        for r in ranges:
+            start = r[0]
+            end = r[1]
+            x = get_x(start)
+            w = get_x(end)-x+tick_width
+            painter.drawRect(x,0,w,self.height())
+
+        painter.setPen(QPen(tick_color, 1.0))
+        # for pos in self._values:
+        #     x = get_x(pos)
+        #     # painter.drawRect(x,0,tick_width, self.height())
+        #     painter.drawLine(x, 0, x, self.height())
 
         # draw background rect
         # if self.height()>=3:

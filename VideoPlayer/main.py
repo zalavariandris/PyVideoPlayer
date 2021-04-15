@@ -701,6 +701,7 @@ class PyVideoPlayer(QWidget):
         slider_controls.layout().addWidget(middle)
 
         self.range_slider = QRangeSlider(self)
+        self.range_slider.setFixedHeight(5)
         @self.range_slider.startValueChanged.connect
         def _(val):
             self.set_state(inpoint=val)
@@ -808,12 +809,12 @@ class PyVideoPlayer(QWidget):
         self.skip_to_start_btn = QPushButton("|<<")
         self.skip_to_start_btn.setFixedWidth(26)
         playback_controls.layout().addWidget(self.skip_to_start_btn)
-        self.skip_to_start_btn.clicked.connect(lambda: self.set_state(frame=self.state['range'][0]))
+        self.skip_to_start_btn.clicked.connect(lambda: self.set_state(frame=self.state['inpoint']))
 
         self.step_back_btn = QPushButton("|<")
         self.step_back_btn.setFixedWidth(26)
         playback_controls.layout().addWidget(self.step_back_btn)
-        self.step_back_btn.clicked.connect(lambda: self.set_state(frame=self.state['frame']-1))
+        self.step_back_btn.clicked.connect(lambda: self.set_state(frame=self.state['outpoint']))
 
         self.reverse_btn = QPushButton("\u23F4")
         self.reverse_btn.setFixedWidth(26)

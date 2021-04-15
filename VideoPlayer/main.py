@@ -18,6 +18,7 @@ import os
 from widgets.cachebar import CacheBar
 from widgets.oscilloscope import Oscilloscope
 from widgets.viewer2D import Viewer2D
+from widgets.lineardial import LinearDial
 import numbers
 import psutil
 
@@ -30,22 +31,7 @@ from OpenImageIO import ImageBuf, ImageSpec, ROI, ImageBufAlgo
 from invoke_in_main import inmain_later, inmain_decorator
 from utils import on
 
-class MyDial(QDial):
-    def __init_(self, parent=None):
-        super().__init_(parent=parent)
-        self.lastValue = None
-        self.lastPos = None
-
-    def mousePressEvent(self, event):
-        self.lastValue = self.value()
-        self.lastPos = event.pos()
-
-    def mouseMoveEvent(self, event):
-        delta = event.pos()-self.lastPos
-        self.setValue(self.lastValue+delta.x()/10)
-
-    def mouseReleaseEvent(self, event):
-        pass
+from widgets.qrangeslider import QRangeSlider
 
 class Viewer2D(Viewer2D):
     valueChanged = Signal(int)
@@ -62,6 +48,14 @@ class Viewer2D(Viewer2D):
         self._is_scrubbing = False
         self._last_pos = None
         self._last_value = None
+
+        self._wrapping = False
+
+    def setWrapping(self, val):
+        self._wrapping = val
+
+    def wrapping(self):
+        return self._wrapping
 
     def minimum(self):
         return self._minimum
@@ -81,8 +75,14 @@ class Viewer2D(Viewer2D):
         return self._value
 
     def setValue(self, val):
-        if val < self._minimum or val > self._maximum:
-            return
+        if self._wrapping:
+            if val<self._minimum:
+                val = self._maximum - (self._minimum-val)+1
+            if val>self._maximum:
+                val = self._minimum + (val-self._maximum)-1
+        else:
+            if val < self._minimum or val > self._maximum:
+                return
         self._value = val
         self.valueChanged.emit(val)
 
@@ -97,9 +97,8 @@ class Viewer2D(Viewer2D):
     def mouseMoveEvent(self, event):
         if self._is_scrubbing:
             delta = event.pos() - self._last_pos
-            value = self._last_value + int(delta.x()/10)
+            value = self._last_value + (delta.x()-delta.y())/10
             self.setValue(value)
-            print("scrub", value)
         else:
             super().mouseMoveEvent(event)
 
@@ -125,10 +124,13 @@ class PyVideoPlayer(QWidget):
             'fps': 24,
             'frame': 0,
             'range': [0, 100],
+            'inpoint': 0,
+            'outpoint': 100,
             'cache': dict(),
             'memory_limit': 3000, # MB
             'playback': "paused", # forward | reverse | paused
             'zoom': "fit",
+            'down_sample': 'full', # full half | quarter
             'export': {
                 'visible': False,
                 'progress': 0,
@@ -306,6 +308,9 @@ class PyVideoPlayer(QWidget):
             # update range
             changes['range'] = (self._reader.first_frame, self._reader.last_frame)
 
+            changes['inpoint'] = self._reader.first_frame
+            changes['outpoint'] = self._reader.last_frame
+
             # update fps based on video
             changes['fps'] = self._reader.fps
 
@@ -322,6 +327,13 @@ class PyVideoPlayer(QWidget):
                 changes['frame'] = changes['range'][0]
             if changes['range'][1]<self.state['frame']:
                 changes['frame'] = changes['range'][1]
+
+        # watch range set in and out points
+        if 'range' in changes:
+            if changes['range'][0]>self.state['inpoint']:
+                changes['inpoint'] = changes['range'][0]
+            if changes['range'][1]<self.state['outpoint']:
+                changes['outpoint'] = changes['range'][1]
 
         # update state
         self.state.update(changes)
@@ -400,6 +412,16 @@ class PyVideoPlayer(QWidget):
         self.toggle_play_action.setShortcutContext(Qt.ApplicationShortcut)
         self.toggle_play_action.setShortcut(QKeySequence(Qt.Key_Space))
 
+        set_inpoint_action = QAction("set in point", self)
+        set_inpoint_action.setShortcutContext(Qt.ApplicationShortcut)
+        set_inpoint_action.setShortcut('i')
+        set_inpoint_action.triggered.connect(lambda: self.set_state(inpoint=self.state['frame']))
+        set_outpoint_action = QAction('set out point', self)
+        set_outpoint_action.setShortcutContext(Qt.ApplicationShortcut)
+        set_outpoint_action.setShortcut('o')
+        set_outpoint_action.triggered.connect(lambda: self.set_state(outpoint=self.state['frame']))
+
+
         def toggle_play():
             if self.state['playback'] == "forward":
                 self.set_state(playback="paused")
@@ -428,6 +450,8 @@ class PyVideoPlayer(QWidget):
         fullscreen_action.setShortcut("u")
 
         fit_action = QAction("fit", self)
+        fit_action.setShortcutContext(Qt.ApplicationShortcut)
+        fit_action.setShortcut(QKeySequence(Qt.Key_Backspace))
         fit_action.triggered.connect(self.fit)
 
         # Menu
@@ -449,6 +473,9 @@ class PyVideoPlayer(QWidget):
         playback_menu.addAction(pause_action)
         playback_menu.addAction(self.toggle_play_action)
         playback_menu.addAction(clear_cache_action)
+
+        playback_menu.addAction(set_inpoint_action)
+        playback_menu.addAction(set_outpoint_action)
 
         ## View Menu
         view_menu = self.menuBar.addMenu("View")
@@ -515,7 +542,7 @@ class PyVideoPlayer(QWidget):
 
         self.layout().addWidget(viewer_toolbar)
 
-        self.zoom_combo = QComboBox()
+        self.zoom_combo = QComboBox(self)
         self.zoom_combo.setToolTip("zoom")
         self.zoom_combo.addItem("fit")
         self.zoom_combo.addItem("10%")
@@ -527,6 +554,7 @@ class PyVideoPlayer(QWidget):
         self.zoom_combo.addItem("800%")
         self.zoom_combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         self.zoom_combo.setEditable(True)
+        self.zoom_combo.setFocusPolicy(Qt.ClickFocus)
         self.zoom_combo.currentTextChanged.connect(lambda text: self.set_state(zoom=int(text[:-1])/100 if text[:-1].isnumeric() else text))
         viewer_toolbar.layout().addWidget(self.zoom_combo)
         @self.state_changed.connect
@@ -536,6 +564,20 @@ class PyVideoPlayer(QWidget):
                 self.zoom_combo.blockSignals(True)
                 self.zoom_combo.setCurrentText(zoom_text)
                 self.zoom_combo.blockSignals(False)
+
+        down_sample_combo = QComboBox()
+        down_sample_combo.addItems(["Full", "Half", "Quarter"])
+        viewer_toolbar.layout().addWidget(down_sample_combo)
+        @down_sample_combo.currentIndexChanged.connect
+        def update_down_sample(idx):
+            self.set_state(down_sample=["full", "half", "quarter"][idx])
+
+        @self.state_changed.connect
+        def _(changes):
+            if 'down_sample' in changes:
+                idx = ["full", "half", "quarter"].index(changes['down_sample'])
+                print("update downsample combo", idx)
+                down_sample_combo.setCurrentIndex(idx)
 
         viewer_toolbar.layout().addStretch()
 
@@ -552,11 +594,11 @@ class PyVideoPlayer(QWidget):
         self.resolution_textitem.setFlags(QGraphicsItem.ItemIgnoresTransformations) 
         self.scene.addItem(self.resolution_textitem)
 
+        self.viewer.setWrapping(True)
         self.viewer.zoomChanged.connect(lambda: self.set_state(zoom=self.viewer.zoom()))
         @self.viewer.valueChanged.connect
         def scrub_frame(val):
             # wait for current frame to preload when scrubbing
-            print("scrub viewer")
             if self.state['playback'] in {"forward","reverse"}:
                 self.set_state(playback="paused")
             self.scrub_event.wait(0.1) # seconds
@@ -607,7 +649,7 @@ class PyVideoPlayer(QWidget):
         slider_controls.layout().setSpacing(0)
         time_controls.layout().addWidget(slider_controls)
 
-        frame_dial = MyDial()
+        frame_dial = LinearDial()
         frame_dial.setMinimum(-99999)
         frame_dial.setMaximum(99999)
         # frame_dial.setWrapping(True) # seem to crash when?
@@ -616,7 +658,6 @@ class PyVideoPlayer(QWidget):
         @frame_dial.valueChanged.connect
         def scrub_frame(val):
             # wait for current frame to preload when scrubbing
-            print("scrub dial")
             if self.state['playback'] in {"forward","reverse"}:
                 self.set_state(playback="paused")
             self.scrub_event.wait(0.1) # seconds
@@ -658,6 +699,37 @@ class PyVideoPlayer(QWidget):
         middle.layout().setContentsMargins(16,0,16,0)
         middle.layout().setSpacing(0)
         slider_controls.layout().addWidget(middle)
+
+        self.range_slider = QRangeSlider(self)
+        @self.range_slider.startValueChanged.connect
+        def _(val):
+            self.set_state(inpoint=val)
+
+        @self.range_slider.endValueChanged.connect
+        def _(val):
+            self.set_state(outpoint=val)
+
+        @self.state_changed.connect
+        def _(changes):
+            if 'range' in changes:
+                self.range_slider.blockSignals(True)
+                self.range_slider.setMinimum(changes['range'][0])
+                self.range_slider.setMaximum(changes['range'][1])
+                self.range_slider.blockSignals(False)
+
+            if 'inpoint' in changes:
+                self.range_slider.blockSignals(True)
+                self.range_slider.setStart(changes['inpoint'])
+                self.range_slider.blockSignals(False)
+
+            if 'outpoint' in changes:
+                self.range_slider.blockSignals(True)
+                self.range_slider.setEnd(changes['outpoint'])
+                self.range_slider.blockSignals(False)
+
+            print(self.state['inpoint'], self.state['outpoint'])
+
+        middle.layout().addWidget(self.range_slider)
 
         self.frame_slider = QSlider(Qt.Horizontal)
         @self.frame_slider.valueChanged.connect
@@ -893,17 +965,19 @@ class PyVideoPlayer(QWidget):
         self.timer = QTimer()
         print(self.timer.setTimerType(Qt.PreciseTimer))
         def next_frame():
+            left = max(self.state['inpoint'], self.state['range'][0])
+            right = min(self.state['outpoint'], self.state['range'][1])
+
             if self.state['playback'] == "forward":
                 frame = self.state['frame']+1
-                if frame>self.state['range'][1]:
-                    frame = self.state['range'][0]
-                self.set_state(frame=frame)
-
+                if frame>right:
+                    frame = left
             elif self.state["playback"] == "reverse":
                 frame = self.state['frame']-1
-                if frame<self.state['range'][0]:
-                    frame = self.state['range'][1]
-                self.set_state(frame=frame)
+                if frame<left:
+                    frame = right
+
+            self.set_state(frame=frame)
 
         self.timer.timeout.connect(next_frame)
         # update timer interval based on fps
@@ -937,6 +1011,8 @@ class PyVideoPlayer(QWidget):
 
         self.dialog = QDialog(self)
         self.dialog.setLayout(QVBoxLayout())
+
+
 
     def toggleFullscreen(self):
         raise NotImplementedError
@@ -1102,17 +1178,19 @@ class PyVideoPlayer(QWidget):
 
         # watch playback and start or stop timer
         # redundant see later
+        interval = int(1000/self.state['fps']) if self.state['fps'] else 0
+        self.statusbar.showMessage(f"{1000/interval if interval>0 else 'inf'}")
         if self.state['playback'] in {"forward", "reverse"}:
             if not self.timer.isActive():
                 print("restart timer!", datetime.now())
-                self.timer.start(round(1000/self.state['fps'] if self.state['fps'] else 0))
+                self.timer.start(interval)
 
         if self.state['playback'] == "paused" and self.timer.isActive():
             print("pause timer", datetime.now())
             self.timer.stop()
 
         # update timer interval based on fps
-        interval = 1000/self.state['fps'] if self.state['fps'] else 0
+        
         if self.timer.interval() != interval:
             self.timer.setInterval(interval)
 
@@ -1121,12 +1199,12 @@ class PyVideoPlayer(QWidget):
             if self.state['frame'] not in self.state['cache']:
                 if self.timer.isActive():
                     print("pause timer 2")
+
                     self.timer.stop()
 
             if self.state['frame'] in self.state['cache']:
                 if not self.timer.isActive():
-                    print("resume timer 2")
-                    self.timer.start(1000/self.state['fps'] if self.state['fps'] else 0)
+                    self.timer.start(interval)
 
         elif self.state['playback'] == "paused":
             if self.timer.isActive():
@@ -1169,9 +1247,11 @@ if __name__ == "__main__":
     else:
         pass
         # window.open("../tests/MASA_sequence/MASA_sequence_00196.jpg")
-        window.open("../tests/Mása - becsukjuk, nem latszik.mp4")
+        # window.open("../tests/Mása - becsukjuk, nem latszik.mp4")
         # window.open("R:/Frank/Preview/Andris/EF_VFX_04_MERGE_v56.mp4")
         # window.open("E:/_PREVIEW/EF_VFX_04_MERGE_v45/EF_VFX_04_MERGE_v45_93820.jpg")
         # window.open("E:/localize/EF_VFX_04/EF_VFX_04_0093230.dpx")
-        # window.set_state(range=(93820, 93900))
+        window.open("R:/Frank/Preview/Andris/EF_VFX_04_MERGE_v64/EF_VFX_04_MERGE_v64_93820.jpg")
+        # window.set_state(range=(93820, 93900), fps=24, memory_limit=8000)
+        window.set_state(fps=24, memory_limit=8000)
     app.exec_()

@@ -7,7 +7,7 @@ from utils import get_ranges
 class CacheBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
-        self._values = [1,2,3,4,5,10,20]
+        self._values = [1,2,3,4,5,10,11,12, 20]
         self._start = 0
         self._end = 100
 
@@ -41,7 +41,7 @@ class CacheBar(QWidget):
             start = r[0]
             end = r[1]
             x = get_x(start)
-            w = get_x(end)-x+tick_width
+            w = get_x(end)-x
             painter.drawRect(x,0,w,self.height())
 
         painter.setPen(QPen(tick_color, 1.0))

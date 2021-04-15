@@ -728,8 +728,6 @@ class PyVideoPlayer(QWidget):
                 self.range_slider.setEnd(changes['outpoint'])
                 self.range_slider.blockSignals(False)
 
-            print(self.state['inpoint'], self.state['outpoint'])
-
         middle.layout().addWidget(self.range_slider)
 
         self.frame_slider = QSlider(Qt.Horizontal)
@@ -1247,12 +1245,12 @@ if __name__ == "__main__":
         window.open(sys.argv[1])
     else:
         pass
-        # window.open("../tests/MASA_sequence/MASA_sequence_00196.jpg")
+        window.open("../tests/MASA_sequence/MASA_sequence_00196.jpg")
         # window.open("../tests/Mása - becsukjuk, nem latszik.mp4")
         # window.open("R:/Frank/Preview/Andris/EF_VFX_04_MERGE_v56.mp4")
         # window.open("E:/_PREVIEW/EF_VFX_04_MERGE_v45/EF_VFX_04_MERGE_v45_93820.jpg")
         # window.open("E:/localize/EF_VFX_04/EF_VFX_04_0093230.dpx")
-        window.open("R:/Frank/Preview/Andris/EF_VFX_04_MERGE_v64/EF_VFX_04_MERGE_v64_93820.jpg")
+        # window.open("R:/Frank/Preview/Andris/EF_VFX_04_MERGE_v64/EF_VFX_04_MERGE_v64_93820.jpg")
         # window.set_state(range=(93820, 93900), fps=24, memory_limit=8000)
         window.set_state(fps=24, memory_limit=8000)
     app.exec_()

@@ -19,7 +19,7 @@ def get_ranges(data):
     result = []
     if not data:
         return result
-    idata = iter(data)
+    idata = iter(sorted([int(v) for v in data]))
     first = prev = next(idata)
     for following in idata:
         if following - prev == 1:

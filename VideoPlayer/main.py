@@ -26,7 +26,7 @@ from threading import Event, Thread
 
 from reader import Reader
 import OpenImageIO as oiio
-from OpenImageIO import ImageBuf, ImageSpec, ROI, ImageBufAlgo
+from OpenImageIO import ImageBuf, ImageSpec, ROI, ImageBufAlgo,ImageOutput
 
 from invoke_in_main import inmain_later, inmain_decorator
 from utils import on
@@ -193,7 +193,7 @@ class PyVideoPlayer(QWidget):
 
     def export(self, filename=None):
         if not filename:
-            filename, filters = QFileDialog.getSaveFileName(self, "Export Video", "/", "*.mp4")
+            filename, filters = QFileDialog.getSaveFileName(self, "Export Video", "/", "*.mp4;; *.jpg")
 
         if not filename:
             return
@@ -204,34 +204,71 @@ class PyVideoPlayer(QWidget):
             'progress': 0
         })
 
+        # set widget
+        first_frame, last_frame = self.state['range']
+        self.export_progress.setMinimum(first_frame)
+        self.export_progress.setMaximum(last_frame)
+        self.export_progress.setFormat(filename+" %v/%m %p%")
+
         def run():
             path, ext = os.path.splitext(filename)
-            assert ext == ".mp4"
+            print("extension:", ext)
+            assert ext in {'.mp4', '.jpg'}
 
             first_frame, last_frame = self.state['range']
             duration = last_frame-first_frame
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-
-            self.export_progress.setMinimum(first_frame)
-            self.export_progress.setMaximum(last_frame)
-            self.export_progress.setFormat(filename+" %v/%m %p%")
-
             fps = self.state['fps']
-            height, width, channels = self._reader.read(first_frame).shape
-            writer = cv2.VideoWriter(filename,fourcc, fps, (width, height))
-            for frame in range(first_frame, last_frame+1):
-                progress = int(100*(frame-first_frame)/(last_frame-first_frame))
-                # print(f"write frame: {frame}, {frame-first_frame}/{last_frame-first_frame} {progress}%")
-                rgb = self.evaluate(frame).copy()
-                bgr = rgb[...,::-1].copy()
-                writer.write(bgr)
+            height, width, channels = self.evaluate(first_frame).shape
 
-                self.set_state(export= {
-                    'visible': self.state['export']['visible'],
-                    'filename': filename,
-                    'progress': frame
-                })
-            writer.release()
+            IsSequence = ext == ".jpg"
+            IsMovie = ext == ".mp4"
+
+            print(IsSequence)
+
+            if IsSequence:
+                for frame in range(first_frame, last_frame+1):
+                    progress = int(100*(frame-first_frame)/(last_frame-first_frame))
+
+                    rgb = self.evaluate(frame).copy()
+                    bgr = rgb[...,::-1].copy()
+                    
+                    frame_filename = path+("%05d" % frame)+ext
+                    print("create output", frame_filename)
+                    out = ImageOutput.create(frame_filename)
+                    if not out:
+                        print(ext, "format is not supported")
+                        return
+                    spec = ImageSpec(width, height, channels, oiio.TypeUInt8)
+
+                    print("wrtie image")
+                    out.open(frame_filename, spec)
+                    out.write_image(bgr)
+                    out.close()
+
+                    # update state
+                    self.set_state(export= {
+                        'visible': self.state['export']['visible'],
+                        'filename': filename,
+                        'progress': frame
+                    })
+
+            if IsMovie:
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                writer = cv2.VideoWriter(filename,fourcc, fps, (width, height))
+                for frame in range(first_frame, last_frame+1):
+                    progress = int(100*(frame-first_frame)/(last_frame-first_frame))
+                    
+                    rgb = self.evaluate(frame).copy()
+                    bgr = rgb[...,::-1].copy()
+                    writer.write(bgr)
+
+                    # update state
+                    self.set_state(export= {
+                        'visible': self.state['export']['visible'],
+                        'filename': filename,
+                        'progress': frame
+                    })
+                writer.release()
 
         the_thread = Thread(target=run, daemon=True).start()
 

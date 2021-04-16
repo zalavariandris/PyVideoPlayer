@@ -849,7 +849,7 @@ class PyVideoPlayer(QWidget):
         self.step_back_btn = QPushButton("|<")
         self.step_back_btn.setFixedWidth(26)
         playback_controls.layout().addWidget(self.step_back_btn)
-        self.step_back_btn.clicked.connect(lambda: self.set_state(frame=self.state['outpoint']))
+        self.step_back_btn.clicked.connect(lambda: self.set_state(frame=self.state['frame']-1))
 
         self.reverse_btn = QPushButton("\u23F4")
         self.reverse_btn.setFixedWidth(26)
@@ -913,7 +913,7 @@ class PyVideoPlayer(QWidget):
         self.skip_to_end_btn = QPushButton(">>|")
         self.skip_to_end_btn.setFixedWidth(26)
         playback_controls.layout().addWidget(self.skip_to_end_btn)
-        self.skip_to_end_btn.clicked.connect(lambda: self.set_state(frame=self.state['range'][1]))
+        self.skip_to_end_btn.clicked.connect(lambda: self.set_state(frame=self.state['outpoint']))
 
         for btn in [self.skip_to_start_btn, self.step_back_btn, self.reverse_btn, self.forward_btn, self.step_forward_btn, self.skip_to_end_btn]:
             btn.setFlat(True)

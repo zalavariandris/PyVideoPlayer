@@ -33,6 +33,13 @@ from utils import on
 
 from widgets.qrangeslider import QRangeSlider
 
+from widgets.myslider import MySlider
+from widgets.myrangeslider import MyRangeSlider
+
+from lut import read_lut, apply_lut
+
+from dataclasses import dataclass
+
 class Viewer2D(Viewer2D):
     valueChanged = Signal(int)
     minimumChanged = Signal(int)
@@ -130,17 +137,23 @@ class PyVideoPlayer(QWidget):
             'memory_limit': 3000, # MB
             'playback': "paused", # forward | reverse | paused
             'zoom': "fit",
-            'down_sample': 'full', # full half | quarter
+            
             'export': {
                 'visible': False,
                 'progress': 0,
                 'filename': None
             },
+
+            'lut_path': None,
+            'lut_enabled': False,
             # computed
             'image': None,
+            'downsample': 'full', # full half | quarter
             'memory': 0,
         }
 
+        self._cache = dict()
+        self._lut = None
         self._reader = None
         self._image_buffer:np.ndarray = None
         self.last_timestamp = None
@@ -181,13 +194,32 @@ class PyVideoPlayer(QWidget):
         # # update viewer
         # self.viewer.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
-    def evaluate(self, frame):
+    def open_lut(self, filename=None):
+        if not filename:
+            filename, filters = QFileDialog.getOpenFileName()
+
+        if not filename:
+            return
+
+        self.set_state(lut_path=filename, lut_enabled=True)
+
+    def evaluate(self, frame, downsample="full", rect=None):
         # read file
         # return np.zeros((256, 256, 3))
 
         with self.read_lock:
-            # time.sleep(0.5)
+            idx = ['full', 'half', 'quarter'].index(downsample)
+            factor = [1,2,4][idx]
+
             data = self._reader.read(frame)
+
+            data = cv2.resize(data, 
+                dsize=(data.shape[1]//factor, data.shape[0]//factor), 
+                interpolation=cv2.INTER_NEAREST)
+
+            if self._lut is not None and self.state['lut_enabled']:
+                data = apply_lut(data.astype(np.float32)/255, self._lut)*255
+                data = data.astype(np.uint8)
 
         return data
 
@@ -208,11 +240,10 @@ class PyVideoPlayer(QWidget):
         first_frame, last_frame = self.state['range']
         self.export_progress.setMinimum(first_frame)
         self.export_progress.setMaximum(last_frame)
-        self.export_progress.setFormat(filename+" %v/%m %p%")
+        self.export_progress.setFormat(filename+" %v %p%")
 
         def run():
             path, ext = os.path.splitext(filename)
-            print("extension:", ext)
             assert ext in {'.mp4', '.jpg'}
 
             first_frame, last_frame = self.state['range']
@@ -223,13 +254,12 @@ class PyVideoPlayer(QWidget):
             IsSequence = ext == ".jpg"
             IsMovie = ext == ".mp4"
 
-            print(IsSequence)
-
             if IsSequence:
                 for frame in range(first_frame, last_frame+1):
                     progress = int(100*(frame-first_frame)/(last_frame-first_frame))
 
                     rgb = self.evaluate(frame).copy()
+                    assert rgb.shape == (height, width, channels)
                     bgr = rgb[...,::-1].copy()
                     
                     frame_filename = path+("%05d" % frame)+ext
@@ -272,19 +302,32 @@ class PyVideoPlayer(QWidget):
 
         the_thread = Thread(target=run, daemon=True).start()
 
+    # def get_cache(self, frame, res):
+    #     return self._cache[(frame, res)]
+
+    # def has_cache(self, frame, res):
+    #     return (frame, res) in self._cache
+
+    # def set_cache(self, frame, res, img):
+    #     self._cache[(frame, res)] = img
+
+    # def cache(self):
+    #     for (frame, res) in self.state['cache']:
+    #         yield frame, res
+
     def preload(self):
         while self.running:
             time.sleep(0.00001)
             if self._reader:
                 def used_memory():
                     megabytes = 0
-                    for frame, (image, timestamp) in self.state['cache'].items():
+                    for (frame, downsample), (image, timestamp) in self.state['cache'].items():
                         megabytes+=image.nbytes / 1024 / 1024 # in MB
                     return megabytes
                 while used_memory() > self.state['memory_limit'] and self.running:
                     oldest_frame = None
                     current_timestamp = datetime.now()
-                    for frame, (image, timestamp) in self.state['cache'].items():
+                    for (frame, downsample), (image, timestamp) in self.state['cache'].items():
                         # print("search cache...")
                         # print(timestamp, current_timestamp>timestamp)
                         if timestamp<current_timestamp:
@@ -300,20 +343,21 @@ class PyVideoPlayer(QWidget):
                     # print("clean old cache")
 
                 if self.requested_frames and self.running:
-                    frame = self.requested_frames.pop()
+                    (frame, downsample) = self.requested_frames.pop()
 
                     if frame == self.state['frame']:
                         self.scrub_event.clear()
 
                     # print("preload frame", frame, threading.current_thread())
                     
-                    img = self.evaluate(frame)
+                    img = self.evaluate(frame, downsample)
                     if frame == self.state['frame']:
                         self.scrub_event.set()
                     if img is not None:
                         with self.read_lock:
                             # print("read frame: ", frame)
-                            self.state['cache'][frame] = (img, datetime.now())
+                            downsample = self.state['downsample']
+                            self.state['cache'][(frame, downsample)] = (img, datetime.now())
 
                             # self.cache_updated.emit()
                             self.set_state(cache=self.state['cache'])
@@ -331,19 +375,24 @@ class PyVideoPlayer(QWidget):
         changes = kwargs.copy()
 
         if 'range' in changes:
-            assert isinstance(kwargs['range'][0], int)
-            assert isinstance(kwargs['range'][1], int)
+            assert isinstance(changes['range'][0], int)
+            assert isinstance(changes['range'][1], int)
+
+            if changes['range'][0]>changes['range'][1]:
+                del changes['range']
 
         # Calculate computed properties
         # -----------------------------
 
         # watch 'path' update range, fpr and clear cache
-        if "path" in kwargs:
+        if "path" in changes:
             # update reader
             self._reader = Reader(self.state['path'])
 
             # update range
             changes['range'] = (self._reader.first_frame, self._reader.last_frame)
+
+            changes['frame'] = self._reader.first_frame
 
             changes['inpoint'] = self._reader.first_frame
             changes['outpoint'] = self._reader.last_frame
@@ -357,45 +406,52 @@ class PyVideoPlayer(QWidget):
             print("zoom at path change")
             changes['zoom'] = "fit"
 
-        # watch range and set frame
-        if 'range' in changes:
-            # update frame
-            if changes['range'][0]>self.state['frame']:
-                changes['frame'] = changes['range'][0]
-            if changes['range'][1]<self.state['frame']:
-                changes['frame'] = changes['range'][1]
 
-        # watch range set in and out points
-        if 'range' in changes:
-            if changes['range'][0]>self.state['inpoint']:
-                changes['inpoint'] = changes['range'][0]
-            if changes['range'][1]<self.state['outpoint']:
-                changes['outpoint'] = changes['range'][1]
+        if "lut_path" in changes:
+            self._lut = read_lut(changes['lut_path'])
+
+        # # watch range and set frame
+        # if 'range' in changes:
+        #     # update frame
+        #     if changes['range'][0]>self.state['frame']:
+        #         changes['frame'] = changes['range'][0]
+        #     if changes['range'][1]<self.state['frame']:
+        #         changes['frame'] = changes['range'][1]
+
+        # # watch range set in and out points
+        # if 'range' in changes:
+        #     if changes['range'][0]>changes.get('inpoint', self.state['inpoint']):
+        #         changes['inpoint'] = changes['range'][0]
+        #     if changes['range'][1]<changes.get('outpoint', self.state['outpoint']):
+        #         changes['outpoint'] = changes['range'][1]
 
         # update state
         self.state.update(changes)
 
         # watch changes to request frames
-        if "frame" in changes or "path" in changes or "cache" in changes:
-            frame = self.state['frame']
-            cache = self.state['cache']
-
-            self.requested_frames = [f for f in [frame] if f not in cache]
+        if "frame" in changes or "path" in changes or "cache" in changes or 'downsample' in changes or 'lut_enabled' in changes:
+            frame = changes.get('frame', self.state['frame'])
+            cache = changes.get('cache', self.state['cache'])
+            downsample = changes.get('downsample', self.state['downsample'])
+            frames = [(f, downsample) for f in [frame] if (f, downsample) not in cache]
+            self.requested_frames = frames
 
         # compute 'image'
-        if "frame" in changes or "path" in changes or "cache" in changes:
-            frame = self.state['frame']
-            cache = self.state['cache']
-            if frame in cache:
-                image, _ = cache[frame]
+        if "frame" in changes or "path" in changes or "cache" in changes or 'downsample' in changes or 'lut_enabled' in changes:
+            frame = changes.get('frame', self.state['frame'])
+            downsample = self.state['downsample']
+            if (frame, downsample) in self.state['cache']:
+                image, _ = self.state['cache'][(frame, downsample)]
             else:
                 image = None
+
             changes['image'] = image
 
         # compute 'memory'
         if "cache" in changes:
+            cache = changes.get('cache', self.state['cache'])
             megabytes = 0
-            for frame, (image, timestamp) in self.state['cache'].items():
+            for (frame, downsample), (image, timestamp) in cache.items():
                 megabytes+=image.nbytes / 1024 / 1024 # in MB
             changes['memory'] = megabytes
 
@@ -472,7 +528,6 @@ class PyVideoPlayer(QWidget):
             if "playback" in changes:
                 is_playing = changes["playback"] in {"forward", "reverse"}
                 if is_playing != self.toggle_play_action.isChecked():
-                    print("update toggle_play", is_playing)
                     self.toggle_play_action.blockSignals(True)
                     self.toggle_play_action.setChecked(is_playing)
                     self.toggle_play_action.blockSignals(True)
@@ -602,22 +657,43 @@ class PyVideoPlayer(QWidget):
                 self.zoom_combo.setCurrentText(zoom_text)
                 self.zoom_combo.blockSignals(False)
 
-        down_sample_combo = QComboBox()
-        down_sample_combo.addItems(["Full", "Half", "Quarter"])
-        viewer_toolbar.layout().addWidget(down_sample_combo)
-        @down_sample_combo.currentIndexChanged.connect
-        def update_down_sample(idx):
-            self.set_state(down_sample=["full", "half", "quarter"][idx])
+        downsample_combo = QComboBox()
+        downsample_combo.addItems(["Full", "Half", "Quarter"])
+        viewer_toolbar.layout().addWidget(downsample_combo)
+        @downsample_combo.currentIndexChanged.connect
+        def update_downsample(idx):
+            self.set_state(downsample=["full", "half", "quarter"][idx])
 
         @self.state_changed.connect
         def _(changes):
-            if 'down_sample' in changes:
-                idx = ["full", "half", "quarter"].index(changes['down_sample'])
-                print("update downsample combo", idx)
-                down_sample_combo.setCurrentIndex(idx)
+            if 'downsample' in changes:
+                idx = ["full", "half", "quarter"].index(changes['downsample'])
+                downsample_combo.setCurrentIndex(idx)
 
         viewer_toolbar.layout().addStretch()
 
+        read_lut_btn = QPushButton("read lut...")
+        read_lut_btn.clicked.connect(self.open_lut)
+        @self.state_changed.connect
+        def _update_lut_btn(change):
+            if "lut_path" in change:
+                read_lut_btn.setText(change['lut_path'])
+
+        enable_lut_btn = QCheckBox("enable")
+        @enable_lut_btn.stateChanged.connect
+        def _(checked):
+            self.set_state(lut_enabled=checked)
+
+        @self.state_changed.connect
+        def _(changes):
+            if 'lut_enabled' in changes:
+                enable_lut_btn.blockSignals(True)
+                enable_lut_btn.setChecked(changes['lut_enabled'])
+                enable_lut_btn.blockSignals(False)
+
+
+        viewer_toolbar.layout().addWidget(read_lut_btn)
+        viewer_toolbar.layout().addWidget(enable_lut_btn)
         # Image Viewer
         self.viewer = Viewer2D()
         self.scene = QGraphicsScene()
@@ -645,7 +721,19 @@ class PyVideoPlayer(QWidget):
         def update_viewer_zoom(changes):
             if 'zoom' in changes:
                 if changes['zoom'] == "fit":
-                    self.viewer.fitInView(self.pix.boundingRect(), Qt.KeepAspectRatio)
+                    if self.state['image'] is not None:
+                        height, width, channels = self.state['image'].shape
+                        if self.state['downsample'] == "full":
+                            pass
+                        elif self.state['downsample'] == "half":
+                            width, height = width*2, height*2
+                        elif self.state['downsample'] == "quarter":
+                            width, height = width*4, height*4
+                        else:
+                            raise NotImplementedError
+                        rect = QRect(0, 0, width, height)
+
+                        self.viewer.fitInView(rect, Qt.KeepAspectRatio)
 
                 elif self.viewer.zoom() != changes['zoom']:
                     if isinstance(changes['zoom'], numbers.Number):
@@ -654,8 +742,17 @@ class PyVideoPlayer(QWidget):
                         self.viewer.blockSignals(False)
 
             if 'image' in changes and changes['image'] is not None and self.state['zoom'] == "fit":
-                h, w, c = changes['image'].shape
-                self.viewer.fitInView(QRect(0,0,w,h), Qt.KeepAspectRatio)
+                height, width, channels = self.state['image'].shape
+                if self.state['downsample'] == "full":
+                    pass
+                elif self.state['downsample'] == "half":
+                    width, height = width*2, height*2
+                elif self.state['downsample'] == "quarter":
+                    width, height = width*4, height*4
+                else:
+                    raise NotImplementedError
+                rect = QRect(0, 0, width, height)
+                self.viewer.fitInView(QRect(0, 0, width, height), Qt.KeepAspectRatio)
 
         @self.state_changed.connect
         def update_viewer_value(changes):
@@ -675,12 +772,13 @@ class PyVideoPlayer(QWidget):
         # Bottom Panel
         # ------------
         time_controls = QWidget()
+
         time_controls.setLayout(QHBoxLayout())
         time_controls.layout().setContentsMargins(0,0,0,0)
         # time_controls.layout().setSpacing(0)
         self.layout().addWidget(time_controls)
 
-        slider_controls = QWidget(self)
+        slider_controls = QFrame(self)
         slider_controls.setLayout(QHBoxLayout())
         slider_controls.layout().setContentsMargins(0,0,0,0)
         slider_controls.layout().setSpacing(0)
@@ -737,38 +835,62 @@ class PyVideoPlayer(QWidget):
         middle.layout().setSpacing(0)
         slider_controls.layout().addWidget(middle)
 
-        self.range_slider = QRangeSlider(self)
-        self.range_slider.setFixedHeight(5)
-        @self.range_slider.startValueChanged.connect
-        def _(val):
-            self.set_state(inpoint=val)
+        # self.range_slider = QRangeSlider(self)
+        # self.range_slider.setFixedHeight(5)
+        # @self.range_slider.startValueChanged.connect
+        # def _(val):
+        #     self.set_state(inpoint=val)
+# 
+        # @self.range_slider.endValueChanged.connect
+        # def _(val):
+        #     self.set_state(outpoint=val)
 
-        @self.range_slider.endValueChanged.connect
-        def _(val):
-            self.set_state(outpoint=val)
+        # @self.state_changed.connect
+        # def _(changes):
+        #     if 'range' in changes:
+        #         self.range_slider.blockSignals(True)
+        #         self.range_slider.setMinimum(changes['range'][0])
+        #         self.range_slider.setMaximum(changes['range'][1])
+        #         self.range_slider.blockSignals(False)
 
+        #     if 'inpoint' in changes:
+        #         self.range_slider.blockSignals(True)
+        #         self.range_slider.setStart(changes['inpoint'])
+        #         self.range_slider.blockSignals(False)
+
+        #     if 'outpoint' in changes:
+        #         self.range_slider.blockSignals(True)
+        #         self.range_slider.setEnd(changes['outpoint'])
+        #         self.range_slider.blockSignals(False)
+
+        # middle.layout().addWidget(self.range_slider)
+
+        range_slider = MyRangeSlider()
+        range_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        range_slider.setFixedHeight(8)
         @self.state_changed.connect
-        def _(changes):
+        def update_range_slider(changes):
             if 'range' in changes:
-                self.range_slider.blockSignals(True)
-                self.range_slider.setMinimum(changes['range'][0])
-                self.range_slider.setMaximum(changes['range'][1])
-                self.range_slider.blockSignals(False)
+                range_slider.blockSignals(True)
+                range_slider.setMinimum(changes['range'][0])
+                range_slider.setMaximum(changes['range'][1])
+                range_slider.blockSignals(False)
 
-            if 'inpoint' in changes:
-                self.range_slider.blockSignals(True)
-                self.range_slider.setStart(changes['inpoint'])
-                self.range_slider.blockSignals(False)
+            if 'inpoint' or 'outpoint' in changes:
+                range_slider.blockSignals(True)
+                range_slider.setValues(changes.get('inpoint', self.state['inpoint']), changes.get('outpoint', self.state['outpoint']))
+                range_slider.blockSignals(False)
 
-            if 'outpoint' in changes:
-                self.range_slider.blockSignals(True)
-                self.range_slider.setEnd(changes['outpoint'])
-                self.range_slider.blockSignals(False)
+        @range_slider.valuesChanged.connect
+        def _(v1, v2):
+            self.set_state(inpoint=v1, outpoint=v2)
 
-        middle.layout().addWidget(self.range_slider)
-
-        self.frame_slider = QSlider(Qt.Horizontal)
-        @self.frame_slider.valueChanged.connect
+        middle.layout().addWidget(range_slider)
+        
+        myslider = MySlider(orientation=Qt.Horizontal)
+        myslider.setTracking(True)
+        middle.layout().addWidget(myslider)
+        @myslider.valueChanged.connect
         def scrub_slider(val):
             # wait for current frame to preload when scrubbing
             if self.state['playback'] in {"forward","reverse"}:
@@ -776,32 +898,59 @@ class PyVideoPlayer(QWidget):
             self.scrub_event.wait(0.1) # seconds
             self.set_state(frame=val)
 
+        @myslider.rangeChanged.connect
+        def _(min, max):
+            self.set_state(range=(min, max))
+
         @self.state_changed.connect
-        def update_slider(changes):
+        def _(changes):
             if 'range' in changes:
-                self.frame_slider.blockSignals(True)
-                self.frame_slider.setMinimum(changes['range'][0])
-                self.frame_slider.setMaximum(changes['range'][1])
-                self.frame_slider.blockSignals(False)
+                myslider.blockSignals(True)
+                myslider.setMinimum(changes['range'][0])
+                myslider.setMaximum(changes['range'][1])
+                myslider.blockSignals(False)
 
             if 'frame' in changes:
-                self.frame_slider.blockSignals(True)
-                self.frame_slider.setValue(changes['frame'])
-                self.frame_slider.blockSignals(False)
+                myslider.blockSignals(True)
+                myslider.setValue(changes['frame'])
+                myslider.blockSignals(False)
 
+        # self.frame_slider = QSlider(Qt.Horizontal)
+        # @self.frame_slider.valueChanged.connect
+        # def scrub_slider(val):
+        #     # wait for current frame to preload when scrubbing
+        #     if self.state['playback'] in {"forward","reverse"}:
+        #         self.set_state(playback="paused")
+        #     self.scrub_event.wait(0.1) # seconds
+        #     self.set_state(frame=val)
 
-        middle.layout().addWidget(self.frame_slider)
+        # @self.state_changed.connect
+        # def update_slider(changes):
+        #     if 'range' in changes:
+        #         self.frame_slider.blockSignals(True)
+        #         self.frame_slider.setMinimum(changes['range'][0])
+        #         self.frame_slider.setMaximum(changes['range'][1])
+        #         self.frame_slider.blockSignals(False)
+
+        #     if 'frame' in changes:
+        #         self.frame_slider.blockSignals(True)
+        #         self.frame_slider.setValue(changes['frame'])
+        #         self.frame_slider.blockSignals(False)
+        # middle.layout().addWidget(self.frame_slider)
+        
         self.cacheBar = CacheBar()
         middle.layout().addWidget(self.cacheBar)
 
         @self.state_changed.connect
         def update_cachebar(changes):
             if 'range' in changes:
-                print("update cache bar range")
                 self.cacheBar.setRange(*changes['range'])
                 
-            if 'cache' in changes:
-                self.cacheBar.setValues([val for val in changes['cache'].keys() ])
+            if 'cache' in changes or 'downsample' in changes:
+                downsample = changes.get('downsample', self.state['downsample'])
+                cache = changes.get('cache', self.state['cache'])
+                cached_frames = [frame for (frame, sample) in cache.keys() if sample==downsample]
+                self.cacheBar.setValues(cached_frames)
 
 
         self.last_frame_spinner = QSpinBox()
@@ -870,6 +1019,7 @@ class PyVideoPlayer(QWidget):
         playback_controls.layout().addWidget(self.reverse_btn)
 
         self.frame_spinner = QSpinBox()
+        self.frame_spinner.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         self.frame_spinner.setAlignment(Qt.AlignHCenter)
         self.frame_spinner.setStyleSheet("QSpinBox{background-color:transparent}")
         self.frame_spinner.setButtonSymbols(QAbstractSpinBox.NoButtons)
@@ -935,8 +1085,6 @@ class PyVideoPlayer(QWidget):
             if 'fps' in changes:
                 self.oscilloscope.setMaximum(changes['fps']*2 if changes['fps'] else 120)
 
-        print("!!!!!!!!!", self.oscilloscope.size())
-
         self.statusbar = QStatusBar()
         self.layout().addWidget(self.statusbar)
 
@@ -999,7 +1147,8 @@ class PyVideoPlayer(QWidget):
 
         # timer
         self.timer = QTimer()
-        print(self.timer.setTimerType(Qt.PreciseTimer))
+        self.timer.setTimerType(Qt.PreciseTimer)
+
         def next_frame():
             left = max(self.state['inpoint'], self.state['range'][0])
             right = min(self.state['outpoint'], self.state['range'][1])
@@ -1008,6 +1157,7 @@ class PyVideoPlayer(QWidget):
                 frame = self.state['frame']+1
                 if frame>right:
                     frame = left
+
             elif self.state["playback"] == "reverse":
                 frame = self.state['frame']-1
                 if frame<left:
@@ -1166,14 +1316,21 @@ class PyVideoPlayer(QWidget):
             height, width, channel = self.state['image'].shape
             bytesPerLine = 3 * width
             qImg = QImage(self.state['image'].data, width, height, bytesPerLine, QImage.Format_RGB888)
-            self.pix.setPixmap(QPixmap(qImg))
+            scale = 1
+        
+            if self.state['downsample'] == 'half':
+                scale = 2
+            elif self.state['downsample'] == 'quarter':
+                scale = 4
 
-        if IsNewImage:
+            pixmap = QPixmap(qImg).scaled(int(width*scale), int(height*scale), Qt.IgnoreAspectRatio)
+            self.pix.setPixmap(pixmap)
+
+
             # update resolution label
-            self.resolution_label.setText("{}x{}".format(width, height))
-
-            self.resolution_textitem.setPos(width, height)
-            self.resolution_textitem.setPlainText("{}x{}".format(width, height))
+            self.resolution_label.setText("{}x{}".format(width*scale, height*scale))
+            self.resolution_textitem.setPos(width*scale, height*scale)
+            self.resolution_textitem.setPlainText("{}x{}".format(width*scale, height*scale))
 
         # if self.state['zoom'] == "fit":
         #     self.viewer.fitInView(self.pix.boundingRect(), Qt.KeepAspectRatio)
@@ -1232,13 +1389,15 @@ class PyVideoPlayer(QWidget):
 
         # start/stop timer
         if self.state['playback'] in {"forward", "reverse"}:
-            if self.state['frame'] not in self.state['cache']:
+            frame = self.state['frame']
+            downsample = self.state['downsample']
+            if (frame, downsample) not in self.state['cache']:
                 if self.timer.isActive():
                     print("pause timer 2")
 
                     self.timer.stop()
 
-            if self.state['frame'] in self.state['cache']:
+            if (frame, downsample) in self.state['cache']:
                 if not self.timer.isActive():
                     self.timer.start(interval)
 
@@ -1258,8 +1417,8 @@ class PyVideoPlayer(QWidget):
 
 from widgets.themes import apply_dark_theme2
 
-if __name__ == "__main__":
 
+if __name__ == "__main__":
     import sys
     app = QApplication()
 
@@ -1281,13 +1440,17 @@ if __name__ == "__main__":
         print("argv:", sys.argv[1])
         window.open(sys.argv[1])
     else:
-        pass
-        window.open("../tests/MASA_sequence/MASA_sequence_00196.jpg")
+        window.open("../tests/resources/MASA_sequence/MASA_sequence_00196.jpg")
+
+        # window.open("../tests/resources/EF_VFX_04/EF_VFX_04_0094900.dpx")
+
         # window.open("../tests/Mása - becsukjuk, nem latszik.mp4")
         # window.open("R:/Frank/Preview/Andris/EF_VFX_04_MERGE_v56.mp4")
         # window.open("E:/_PREVIEW/EF_VFX_04_MERGE_v45/EF_VFX_04_MERGE_v45_93820.jpg")
         # window.open("E:/localize/EF_VFX_04/EF_VFX_04_0093230.dpx")
         # window.open("R:/Frank/Preview/Andris/EF_VFX_04_MERGE_v64/EF_VFX_04_MERGE_v64_93820.jpg")
+        # window.open_lut("../tests/resources/AlexaV3_K1S1_LogC2Video_Rec709_EE_aftereffects3d.cube")
+        # window.open_lut()
         # window.set_state(range=(93820, 93900), fps=24, memory_limit=8000)
-        window.set_state(fps=24, memory_limit=8000)
+        # window.set_state(fps=24, memory_limit=8000, range=(196, 200))
     app.exec_()

@@ -28,7 +28,7 @@ class Viewer2D(QGraphicsView):
         self.drawGrid = True
 
         # self.setTransformationAnchor(QGraphicsView.NoAnchor)
-        # self.setResizeAnchor(QGraphicsView.NoAnchor)
+        # self.setResizeAnchor(QGraphiwcsView.NoAnchor)
 
     def zoom(self):
         zoom_horizontal = self.transform().m11()

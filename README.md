@@ -34,6 +34,9 @@ This is a simple work in progress image sequence player built with python3 pysid
 - [ ] expusure, gamma
 - [ ] LUT
 - [ ] give it a better name : )
+## TESTS TODO
+- [ ] open single file
+- [ ] first and last frame equal. Only a singlie frame. Test zoom with timeslider
 
 ## Build with PyInstaller
 > pyinstaller VideoPlayer/main.py

@@ -8,13 +8,19 @@ class CacheBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self._values = [1,2,3,4,5,10,11,12, 20]
-        self._start = 0
-        self._end = 100
+        self._minimum = 0
+        self._maximum = 99
+
+    def minimum(self):
+        return self._minimum
+
+    def maximum(self):
+        return self._maximum
 
     def paintEvent(self, event):
-        padding = 8
-        tick_width = self.width() / (self._end-self._start)
-        tick_width/=1.0
+        # padding = 0
+        # tick_width = self.width() / (self._maximum-self._minimum)
+        # tick_width/=1.0
 
         # draw
         painter = QPainter(self)
@@ -27,12 +33,11 @@ class CacheBar(QWidget):
         ranges = [r for r in get_ranges(self._values)]
         # print(ranges)
 
-        def get_x(pos):
-            x = pos-self._start
-            x/=self._end-self._start
-            x*=self.width()-padding*2
-            x+=padding
-            return x
+        def to_pos(val):
+            val-=self.minimum()
+            val/=self.maximum()-self.minimum()+1
+            val*=self.width()
+            return val
 
         painter.setPen(Qt.NoPen)
         painter.setBrush(tick_color)
@@ -40,8 +45,8 @@ class CacheBar(QWidget):
         for r in ranges:
             start = r[0]
             end = r[1]
-            x = get_x(start)
-            w = get_x(end)-x
+            x = to_pos(start)
+            w = to_pos(end)-x
             painter.drawRect(x,0,w,self.height())
 
         painter.setPen(QPen(tick_color, 1.0))
@@ -64,14 +69,14 @@ class CacheBar(QWidget):
     def values(self):
         return self._values
 
-    def setRange(self, start, end):
-        print("range", start, end)
-        self._start = start
-        self._end = end
+    def setRange(self, minimum, maximum):
+        print("range", minimum, maximum)
+        self._minimum = minimum
+        self._maximum = maximum
         self.update()
 
     def range(self):
-        return (self._start, self._end)
+        return (self._minimum, self._maximum)
 
     def sizeHint(self):
         return QSize(400, 10)

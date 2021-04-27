@@ -32,5 +32,3 @@ def get_ranges(data):
     # for the last remaining range.
     result.append((first, prev+1))
     return result
-
-

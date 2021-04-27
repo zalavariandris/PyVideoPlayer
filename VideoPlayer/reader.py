@@ -32,7 +32,14 @@ def is_sequence(filePath:str)->bool:
     
     return path.rstrip(string.digits) != path
 
-def parse_sequence(path):
+def parse_sequence(path: str)->Tuple[str,int,int]:
+    """
+    return:
+      first_frame: the first frame of the sequence
+      last_Frame: the last frame of the sequence
+      sequence_path in format: {folder}/{filename}d{5}.{ext}
+      return (sequence_path, first_frame, last_frame)
+    """
     folder, name = os.path.split(path)
     base, ext = os.path.splitext(name)
     folder = os.path.dirname(path)
@@ -80,10 +87,10 @@ class Reader:
 
     def read(self, frame: int)->Union[np.ndarray, None]:
         if frame < self._first_frame:
-            return None
+            frame = self._first_frame
 
         if frame > self._last_frame:
-            return None
+            frame = self._last_frame
 
         if self._is_sequence:
             frame_path = self._sequence_path % frame

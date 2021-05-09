@@ -3,6 +3,7 @@ import cv2
 from PySide6.QtWidgets import *
 from PySide6.QtCore import *
 from PySide6.QtGui import *
+from PySide6.QtOpenGLWidgets import *
 
 import numpy as np
 
@@ -22,6 +23,8 @@ from widgets.lineardial import LinearDial
 import numbers
 import psutil
 
+from LUT import read_lut, apply_lut
+
 from threading import Event, Thread
 
 from reader import Reader
@@ -36,9 +39,56 @@ from widgets.qrangeslider import QRangeSlider
 from widgets.myslider import MySlider
 from widgets.myrangeslider import MyRangeSlider
 
-from lut import read_lut, apply_lut
 
 from dataclasses import dataclass
+
+from OpenGL.GL import *
+
+from typing import Tuple
+
+
+@dataclass(eq=True, frozen=True)
+class CacheKey:
+    frame: int
+    downsample: str # full | half | quarter
+    lut: str # Path | None
+
+
+class GLGraphicsItem(QGraphicsItem):
+    def paint(self, painter, option, widget):
+        w, h = 200, 200
+        painter.beginNativePainting()
+
+        # info = "vendor: {}\nrenderer: {}\nversion: {}\nglsl: {}".format(
+        #     str(glGetString(GL_VENDOR)),
+        #     glGetString(GL_RENDERER),
+        #     glGetString(GL_VERSION),
+        #     glGetString(GL_SHADING_LANGUAGE_VERSION)
+        # )
+        # print(info)
+
+        print("paint")
+        glViewport(20, 20, w, h)    # Reset The Current Viewport And Perspective Transformation
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        # gluPerspective(45.0, w / h, 0.1, 100.0)
+        glMatrixMode(GL_MODELVIEW)
+
+        size = 200, 200
+ 
+        glLoadIdentity()
+        glTranslatef(0.0 , 0.0, -6.0)
+        glBegin(GL_TRIANGLES);
+        glVertex3f(0.0, 1.0*size[1], 0.0)
+        glVertex3f(-1.0*size[0], -1.0*size[1], 0.0)
+        glVertex3f(1.0*size[0], -1.0*size[1], 0.0)
+
+        glEnd()
+        painter.endNativePainting()
+
+    def boundingRect(self):
+        return QRectF(0,0, 200, 200)
+
 
 class Viewer2D(Viewer2D):
     valueChanged = Signal(int)
@@ -57,6 +107,8 @@ class Viewer2D(Viewer2D):
         self._last_value = None
 
         self._wrapping = False
+
+        # self.setViewport(QOpenGLWidget())
 
     def setWrapping(self, val):
         self._wrapping = val
@@ -114,7 +166,6 @@ class Viewer2D(Viewer2D):
             self._is_scrubbing = False
         else:
             super().mouseReleaseEvent(event)
-
 
             
 class PyVideoPlayer(QWidget):
@@ -203,7 +254,7 @@ class PyVideoPlayer(QWidget):
 
         self.set_state(lut_path=filename, lut_enabled=True)
 
-    def evaluate(self, frame, downsample="full", rect=None):
+    def evaluate(self, frame, downsample, lut, rect=None):
         # read file
         # return np.zeros((256, 256, 3))
 
@@ -211,17 +262,17 @@ class PyVideoPlayer(QWidget):
             idx = ['full', 'half', 'quarter'].index(downsample)
             factor = [1,2,4][idx]
 
-            data = self._reader.read(frame)
+            pixels = self._reader.read(frame)
 
-            data = cv2.resize(data, 
-                dsize=(data.shape[1]//factor, data.shape[0]//factor), 
+            pixels = cv2.resize(pixels, 
+                dsize=(pixels.shape[1]//factor, pixels.shape[0]//factor), 
                 interpolation=cv2.INTER_NEAREST)
 
-            if self._lut is not None and self.state['lut_enabled']:
-                data = apply_lut(data.astype(np.float32)/255, self._lut)*255
-                data = data.astype(np.uint8)
+            if lut:
+                pixels = apply_lut(pixels.astype(np.float32)/255, self._lut)*255
+                pixels = pixels.astype(np.uint8)
 
-        return data
+        return pixels
 
     def export(self, filename=None):
         if not filename:
@@ -302,77 +353,78 @@ class PyVideoPlayer(QWidget):
 
         the_thread = Thread(target=run, daemon=True).start()
 
-    # def get_cache(self, frame, res):
-    #     return self._cache[(frame, res)]
+    def get_cache(self, key: CacheKey):
+        # assert isinstance(key, CacheKey)
 
-    # def has_cache(self, frame, res):
-    #     return (frame, res) in self._cache
+        return self.state['cache'][key]
 
-    # def set_cache(self, frame, res, img):
-    #     self._cache[(frame, res)] = img
-
-    # def cache(self):
-    #     for (frame, res) in self.state['cache']:
-    #         yield frame, res
+    def set_cache(self, key: CacheKey, value: Tuple[np.ndarray, datetime]):
+        # assert isinstance(key, CacheKey) and isinstance(value[0], np.ndarray) and isinstance(value[1], datetime)
+        self.state['cache'][key] = value
 
     def preload(self):
         while self.running:
-            time.sleep(0.00001)
-            if self._reader:
-                def used_memory():
-                    megabytes = 0
-                    for (frame, downsample), (image, timestamp) in self.state['cache'].items():
-                        megabytes+=image.nbytes / 1024 / 1024 # in MB
-                    return megabytes
-                while used_memory() > self.state['memory_limit'] and self.running:
-                    oldest_frame = None
-                    current_timestamp = datetime.now()
-                    for (frame, downsample), (image, timestamp) in self.state['cache'].items():
-                        # print("search cache...")
-                        # print(timestamp, current_timestamp>timestamp)
-                        if timestamp<current_timestamp:
-                            current_timestamp = timestamp
-                            oldest_frame = frame
+            time.sleep(0.0)
+            # if self._reader:
+            # manage cache memory
+            def used_memory():
+                megabytes = 0
+                for (image, _) in self.state['cache'].values():
+                    megabytes+=image.nbytes / 1024 / 1024 # in MB
+                return megabytes
 
-                    if oldest_frame is not None:
-                        # print("delete frame:", oldest_frame)
-                        del self.state['cache'][oldest_frame]
+            while used_memory() > self.state['memory_limit'] and self.running:
+                oldest_cache_key: CacheKey = None
+                current_timestamp = datetime.now()
+                for cache_key, (_, timestamp) in self.state['cache'].items():
+                    # print("search cache...")
+                    # print(timestamp, current_timestamp>timestamp)
+                    if timestamp<current_timestamp:
+                        current_timestamp = timestamp
+                        oldest_cache_key = cache_key
+
+                if oldest_cache_key is not None:
+                    # print("delete frame:", oldest_frame)
+                    del self.state['cache'][oldest_cache_key]
+                    # self.cache_updated.emit()
+                    self.set_state(cache=self.state['cache'])
+
+                # print("clean old cache")
+
+            # preload requested frames
+            if self.requested_frames and self.running:
+                cache_key = self.requested_frames.pop()
+
+                if cache_key.frame == self.state['frame']:
+                    self.scrub_event.clear()
+
+                # print("preload frame", frame, threading.current_thread())
+                
+                img = self.evaluate(cache_key.frame, cache_key.downsample, cache_key.lut)
+                if cache_key.frame == self.state['frame']:
+                    self.scrub_event.set()
+
+                if img is not None:
+                    with self.read_lock:
+                        # print("read frame: ", frame)
+                        downsample = self.state['downsample']
+                        lut = self.state['lut_path'] if self.state['lut_enabled'] else None
+                        self.set_cache(cache_key, (img, datetime.now()))
+
                         # self.cache_updated.emit()
                         self.set_state(cache=self.state['cache'])
 
-                    # print("clean old cache")
-
-                if self.requested_frames and self.running:
-                    (frame, downsample) = self.requested_frames.pop()
-
-                    if frame == self.state['frame']:
-                        self.scrub_event.clear()
-
-                    # print("preload frame", frame, threading.current_thread())
-                    
-                    img = self.evaluate(frame, downsample)
-                    if frame == self.state['frame']:
-                        self.scrub_event.set()
-                    if img is not None:
-                        with self.read_lock:
-                            # print("read frame: ", frame)
-                            downsample = self.state['downsample']
-                            self.state['cache'][(frame, downsample)] = (img, datetime.now())
-
-                            # self.cache_updated.emit()
-                            self.set_state(cache=self.state['cache'])
-
-            else:
-                # idle
-                pass
+            # else:
+            #     # idle
+            #     pass
 
     @inmain_decorator(wait_for_return=False)
     def set_state(self, **kwargs):
-        # print("set state", threading.current_thread())
         assert threading.current_thread() is threading.main_thread()
+
         self.state.update(kwargs)
 
-        changes = kwargs.copy()
+        changes = kwargs
 
         if 'range' in changes:
             assert isinstance(changes['range'][0], int)
@@ -403,7 +455,6 @@ class PyVideoPlayer(QWidget):
             # clear cache
             changes['cache'] = dict()
 
-            print("zoom at path change")
             changes['zoom'] = "fit"
 
 
@@ -428,22 +479,31 @@ class PyVideoPlayer(QWidget):
         # update state
         self.state.update(changes)
 
-        # watch changes to request frames
-        if "frame" in changes or "path" in changes or "cache" in changes or 'downsample' in changes or 'lut_enabled' in changes:
-            frame = changes.get('frame', self.state['frame'])
-            cache = changes.get('cache', self.state['cache'])
-            downsample = changes.get('downsample', self.state['downsample'])
-            frames = [(f, downsample) for f in [frame] if (f, downsample) not in cache]
-            self.requested_frames = frames
+        # # watch changes to request frames
+        # if "frame" in changes or "path" in changes or "cache" in changes or 'downsample' in changes or 'lut_enabled' in changes:
+        #     frame = changes.get('frame', self.state['frame'])
+        #     cache = changes.get('cache', self.state['cache'])
+        #     downsample = changes.get('downsample', self.state['downsample'])
+        #     lut_path = changes.get('lut_path', self.state['lut_path'])
+        #     lut_enabled = changes.get('lut_enabled', self.state['lut_enabled'])
+        #     lut = lut_path if lut_enabled else None
+        #     frames = [CacheKey(f, downsample, lut) for f in [frame] if CacheKey(f, downsample, lut) not in cache]
+
+        #     self.requested_frames = frames
 
         # compute 'image'
         if "frame" in changes or "path" in changes or "cache" in changes or 'downsample' in changes or 'lut_enabled' in changes:
             frame = changes.get('frame', self.state['frame'])
-            downsample = self.state['downsample']
-            if (frame, downsample) in self.state['cache']:
-                image, _ = self.state['cache'][(frame, downsample)]
+            downsample = changes.get('downsample', self.state['downsample'])
+            lut_path = changes.get('lut_path', self.state['lut_path'])
+            lut_enabled = changes.get('lut_enabled', self.state['lut_enabled'])
+
+            cache_key = CacheKey(frame, downsample, lut_path if lut_enabled else None)
+            if cache_key in self.state['cache']:
+                image, _ = self.get_cache(cache_key)
             else:
-                image = None
+                image = self.evaluate(cache_key.frame, cache_key.downsample, cache_key.lut)
+                self.set_cache(cache_key, (image, datetime.now()))
 
             changes['image'] = image
 
@@ -451,7 +511,7 @@ class PyVideoPlayer(QWidget):
         if "cache" in changes:
             cache = changes.get('cache', self.state['cache'])
             megabytes = 0
-            for (frame, downsample), (image, timestamp) in cache.items():
+            for cache_key, (image, timestamp) in cache.items():
                 megabytes+=image.nbytes / 1024 / 1024 # in MB
             changes['memory'] = megabytes
 
@@ -466,7 +526,6 @@ class PyVideoPlayer(QWidget):
         # emit change signal
         # ------------------
         self.state_changed.emit(changes)
-
     
     def create_menubar(self):
         # Actions
@@ -597,25 +656,6 @@ class PyVideoPlayer(QWidget):
                 if self.export_dialog.isVisible():
                     self.export_progress.setValue(self.state['export']['progress'])
 
-    # def watch(self, *keys):
-    #     pass
-
-    # def on(self, fn):
-    #     from inspect import signature
-    #     keys = [key for key in signature(fn).parameters] 
-    #     print(keys)
-    #     relevant_changes = dict()
-    #     def on_change(changes):
-    #         if any(arg in changes for arg in keys):
-    #             args = [changes.get(key) or self.state[key] for key in keys]
-    #             fn(*args)
-    #             # print(args)
-    #             # fn(frame=100, zoom=50)
-    #             # wrap(**relevant_changes)
-    #             # print("stte changed:", ", ".join(["{}: {}".format(key, val) for key, val in relevant_changes.items()]))
-
-    #     self.state_changed.connect(on_change)
-
     def create_gui(self):
         # View
         # ----
@@ -698,7 +738,6 @@ class PyVideoPlayer(QWidget):
         self.viewer = Viewer2D()
         self.scene = QGraphicsScene()
         self.viewer.setScene(self.scene)
-        
 
         self.pix = QGraphicsPixmapItem()
         self.scene.addItem(self.pix)
@@ -840,7 +879,7 @@ class PyVideoPlayer(QWidget):
         # @self.range_slider.startValueChanged.connect
         # def _(val):
         #     self.set_state(inpoint=val)
-# 
+        # 
         # @self.range_slider.endValueChanged.connect
         # def _(val):
         #     self.set_state(outpoint=val)
@@ -949,9 +988,8 @@ class PyVideoPlayer(QWidget):
             if 'cache' in changes or 'downsample' in changes:
                 downsample = changes.get('downsample', self.state['downsample'])
                 cache = changes.get('cache', self.state['cache'])
-                cached_frames = [frame for (frame, sample) in cache.keys() if sample==downsample]
+                cached_frames = [cache_key.frame for cache_key in cache.keys() if cache_key.downsample==downsample]
                 self.cacheBar.setValues(cached_frames)
-
 
         self.last_frame_spinner = QSpinBox()
         self.last_frame_spinner.setMinimum(-999999)
@@ -1198,23 +1236,7 @@ class PyVideoPlayer(QWidget):
         self.dialog = QDialog(self)
         self.dialog.setLayout(QVBoxLayout())
 
-
-
-    def toggleFullscreen(self):
-        raise NotImplementedError
-        # if self.dialog.isVisible():
-        #     self.layout().addWidget(self.viewer)
-        #     self.dialog.hide()
-        # else:
-        #     self.dialog.show()
-        #     self.dialog.setWindowState(Qt.WindowFullScreen)
-        #     self.dialog.layout().addWidget(self.viewer)
-
-    def fit(self):
-        self.set_state(zoom="fit")
-
     def update_gui(self):
-        # print("update gui")
         IsNewImage = self.state['image'] is not None and self._image_buffer is not self.state['image']
         
         if IsNewImage:
@@ -1391,13 +1413,16 @@ class PyVideoPlayer(QWidget):
         if self.state['playback'] in {"forward", "reverse"}:
             frame = self.state['frame']
             downsample = self.state['downsample']
-            if (frame, downsample) not in self.state['cache']:
+            lut = self.state['lut_path'] if self.state['lut_enabled'] else None
+            cache_key = CacheKey(frame, downsample, lut)
+
+            if cache_key not in self.state['cache']:
                 if self.timer.isActive():
                     print("pause timer 2")
 
                     self.timer.stop()
 
-            if (frame, downsample) in self.state['cache']:
+            if cache_key in self.state['cache']:
                 if not self.timer.isActive():
                     self.timer.start(interval)
 
@@ -1414,6 +1439,23 @@ class PyVideoPlayer(QWidget):
     def closeEvent(self, event):
         self.running = False
         print("close")
+
+    def toggleFullscreen(self):
+        raise NotImplementedError
+        # if self.dialog.isVisible():
+        #     self.layout().addWidget(self.viewer)
+        #     self.dialog.hide()
+        # else:
+        #     self.dialog.show()
+        #     self.dialog.setWindowState(Qt.WindowFullScreen)
+        #     self.dialog.layout().addWidget(self.viewer)
+
+    def fit(self):
+        self.set_state(zoom="fit")
+
+    def zoom(self, value):
+        self.set_state(zoom=value)
+
 
 from widgets.themes import apply_dark_theme2
 
@@ -1436,6 +1478,8 @@ if __name__ == "__main__":
     
     window = PyVideoPlayer()
     window.show()
+
+
     if len(sys.argv)>1:
         print("argv:", sys.argv[1])
         window.open(sys.argv[1])

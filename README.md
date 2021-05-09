@@ -21,10 +21,16 @@ This is a simple work in progress image sequence player built with python3 pysid
 - [x] dark theme
 - [x] fix first frame number when image sequence starts other than 0
 
-- [ ] frame scrubbing with a frame dial
-- [ ] mark in, out point
-- [ ] create a precise frameslider widget with matching cache bar
+- [x] frame scrubbing with a frame dial
+- [x] mark in, out point
+- [x] create a precise frameslider widget with matching cache bar
 
+- [ ] LUT
+  - [x] read .cube lut files
+  - [x] apply lut with cython to pixels
+  - [ ] create gui buttons to open, en enable lut
+  - [ ] add LUT to cache key
+  - [ ] use OpenColorIO
 
 - [ ] fullscreen
 - [ ] fullscreen scrubbing
@@ -32,8 +38,9 @@ This is a simple work in progress image sequence player built with python3 pysid
 - [ ] drag and drop
 
 - [ ] expusure, gamma
-- [ ] LUT
+
 - [ ] give it a better name : )
+
 ## TESTS TODO
 - [ ] open single file
 - [ ] first and last frame equal. Only a singlie frame. Test zoom with timeslider

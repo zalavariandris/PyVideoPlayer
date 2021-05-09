@@ -61,30 +61,41 @@ def parse_sequence(path: str)->Tuple[str,int,int]:
     # return sequence metadata
     return sequence_path, first_frame, last_frame
 
+
+from pathlib import Path
 class Reader:
     def __init__(self, path):
         self._is_sequence = is_sequence(path)
         self._path = path
+        assert Path(path).exists()
         if self._is_sequence:
+            # IMAGE SEQUENCE
             self._cap = None
+            self._image = oiio.ImageInput.open(path)
             self._is_sequence = True
-            # parse sequence
-            print("parse sequence")
 
+            # get metadata
             sequence_path, first_frame, last_frame = parse_sequence(self._path)
             self._sequence_path = sequence_path
             self._first_frame = first_frame
             self._last_frame = last_frame
             self._fps = None
-
+            self._width = self._image.spec().width
+            self._height = self._image.spec().height
+        
         else:
+            # VIDEO FILE
+            self._is_sequence = False
             self._cap = cv2.VideoCapture(path)
+            self._image = None
+
+            # get metadata
             self._first_frame = 0
             self._last_frame = int(self._cap.get(cv2.CAP_PROP_FRAME_COUNT))-1
             self._fps = self._cap.get(cv2.CAP_PROP_FPS)
-            self._width = self._cap.get
-            self._is_sequence = False
-
+            self._width = int( self._cap.get(cv2.CAP_PROP_FRAME_WIDTH) )
+            self._height = int( self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT) )
+            
     def read(self, frame: int)->Union[np.ndarray, None]:
         if frame < self._first_frame:
             frame = self._first_frame
@@ -96,9 +107,9 @@ class Reader:
             frame_path = self._sequence_path % frame
             name, ext = os.path.splitext(frame_path)
 
-            inputImage = oiio.ImageInput.open( frame_path )
-            rgb = (inputImage.read_image()*255).astype(np.uint8)
-            inputImage.close()
+            inputImage = oiio.ImageBuf( frame_path )
+            rgb = (inputImage.get_pixels()*255).astype(np.uint8)
+            # inputImage.close()
 
             # 
             rgb.flags.writeable = False
@@ -116,7 +127,7 @@ class Reader:
                 return None
 
     @property
-    def width(sekf)->int:
+    def width(self)->int:
         return self._width
 
     @property
@@ -134,3 +145,6 @@ class Reader:
     @property
     def fps(self)->float:
         return self._fps
+
+    def __hash__(self):
+        return hash(self.path)

@@ -1456,5 +1456,5 @@ if __name__ == "__main__":
         window.open("../tests/resources/MASA_sequence/MASA_sequence_00196.jpg")
         # window.open("../tests/resources/EF_VFX_04/EF_VFX_04_0094900.dpx")
         
-        window.set_state(fps=24, memory_limit=100)
+        window.set_state(fps=24, memory_limit=1000)
     app.exec_()

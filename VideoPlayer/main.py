@@ -40,6 +40,11 @@ from dataclasses import dataclass
 
 from LUT import read_lut, apply_lut
 
+import mimetypes
+
+def evaluate(self, frame: int, image_path: str, downsample: int, lut_path: str, rect=None)->np.ndarray:
+    return pixels
+
 class Viewer2D(Viewer2D):
     valueChanged = Signal(int)
     minimumChanged = Signal(int)
@@ -115,7 +120,6 @@ class Viewer2D(Viewer2D):
         else:
             super().mouseReleaseEvent(event)
 
-
             
 class PyVideoPlayer(QWidget):
     frame_loaded = Signal()
@@ -180,6 +184,27 @@ class PyVideoPlayer(QWidget):
         self.export_dialog.layout().addWidget(self.export_progress)
 
         self.scrub_event = threading.Event()
+
+        self.setAcceptDrops(True)
+        self.viewer.setAcceptDrops(False)
+
+    def dragEnterEvent(self, event):
+        print('drag enter', event)
+        if event.mimeData().hasUrls():
+            url = event.mimeData().urls()[0]
+            if url.isLocalFile():
+                path = url.path()
+                mime, encoding = mimetypes.guess_type(path)
+                if mime:
+                    IsVideo = mime.split("/")[0] == 'video'
+                    IsImage = mime.split("/")[0] == 'image'
+                    if IsVideo or IsImage:
+                        event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        path = event.mimeData().urls()[0].path(QUrl.FullyDecoded)[1:]
+        print("open path:", Path(path))
+        self.open(path)
 
     def open(self, filename=None):
         if not filename:

@@ -2,15 +2,15 @@
 
 This is a simple work in progress image sequence player built with python3 pyside6 and opencv.
 
-## TODO
-- [x] create exe
-- [x] open files directly by *open with* or *drag and drop*
+## TODO features
+- [x] open files directly with UI
+- [x] open video with *drag and drop*
+- [ ] open lut with *drag and drop*
 - [x] implement Viewer
 - [x] add zoom and zoom to fit fit
 - [x] zoom around mouse cursor
 - [x] zoom around pinch center
 - [x] reimplement pan, interferes with zoom around pinch center
-
 - [x] fix is_sequence when video files eg .mp4 ends with a number
 - [x] Reader class to support sequence starts at non zero
 - [x] loop by default
@@ -20,23 +20,20 @@ This is a simple work in progress image sequence player built with python3 pysid
 - [x] add non blobking export with gui
 - [x] dark theme
 - [x] fix first frame number when image sequence starts other than 0
-
 - [x] frame scrubbing with a frame dial
+- [x] frame scrubbing with right mouse drag on viewer
 - [x] mark in, out point
 - [x] create a precise frameslider widget with matching cache bar
-
-- [ ] LUT
+- [x] LUT
   - [x] read .cube lut files
   - [x] apply lut with cython to pixels
-  - [ ] create gui buttons to open, en enable lut
-  - [ ] add LUT to cache key
-  - [ ] use OpenColorIO
-
+  - [x] create gui buttons to open, en enable lut
+  - [x] add LUT to cache key
+  - [x] apply lut with trilinear interpolation
+  - [ ] use OpenColorIO for LUT
+- [ ] create exe
 - [ ] fullscreen
-- [ ] fullscreen scrubbing
-- [ ] support 16 and 32bit image formats
-- [ ] drag and drop
-
+- [ ] use 32bit float internally
 - [ ] expusure, gamma
 
 - [ ] give it a better name : )
@@ -44,6 +41,7 @@ This is a simple work in progress image sequence player built with python3 pysid
 ## TESTS TODO
 - [ ] open single file
 - [ ] first and last frame equal. Only a singlie frame. Test zoom with timeslider
+- [ ] drag and drop files with non-asci characters
 
 ## Build with PyInstaller
 > pyinstaller VideoPlayer/main.py

@@ -24,7 +24,7 @@ import psutil
 
 from threading import Event, Thread
 
-from reader import Reader
+from read import Reader
 import OpenImageIO as oiio
 from OpenImageIO import ImageBuf, ImageSpec, ROI, ImageBufAlgo,ImageOutput
 
@@ -129,6 +129,8 @@ class PyVideoPlayer(QWidget):
         super().__init__(parent=parent)
 
         # self.setWindowFlags(Qt.FramelessWindowHint)
+
+        self.times = {}
 
         self.state = {
             'path': None,
@@ -236,15 +238,21 @@ class PyVideoPlayer(QWidget):
             idx = ['full', 'half', 'quarter'].index(downsample)
             factor = [1,2,4][idx]
 
+            begin = time.time()
             data = self._reader.read(frame)
+            self.times['read'] = time.time()-begin
 
+            begin = time.time()
             data = cv2.resize(data, 
                 dsize=(data.shape[1]//factor, data.shape[0]//factor), 
                 interpolation=cv2.INTER_NEAREST)
+            self.times['resize'] = time.time()-begin
 
+            begin = time.time()
             if self._lut is not None and self.state['lut_enabled']:
                 data = apply_lut(data.astype(np.float32)/255, self._lut)*255
                 data = data.astype(np.uint8)
+            self.times['lut'] = time.time()-begin
 
         return data
 
@@ -1110,14 +1118,15 @@ class PyVideoPlayer(QWidget):
 
         self.oscilloscope = Oscilloscope()
         self.oscilloscope.setMinimum(0)
-        self.oscilloscope.setMaximum(self.state['fps']*2)
+        self.oscilloscope.setMaximum(2/self.state['fps'])
+
         self.oscilloscope.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         self.oscilloscope.resize(100,10)
 
         @self.state_changed.connect
         def update_oscilloscope(changes):
             if 'fps' in changes:
-                self.oscilloscope.setMaximum(changes['fps']*2 if changes['fps'] else 120)
+                self.oscilloscope.setMaximum(2/changes['fps'] if changes['fps'] else 120)
 
         self.statusbar = QStatusBar()
         self.layout().addWidget(self.statusbar)
@@ -1399,7 +1408,8 @@ class PyVideoPlayer(QWidget):
                 dt = (timestamp-self.last_timestamp).total_seconds()
                 if dt>0:
                     self.fps_label.setText("{:.2f}".format(1/dt))
-                    self.oscilloscope.push(1/dt)
+                    times = [v for v in self.times.values()]+[dt]
+                    self.oscilloscope.push(*times)
 
             self.last_timestamp = timestamp
 
@@ -1452,11 +1462,9 @@ class PyVideoPlayer(QWidget):
         self.running = False
         print("close")
 
-from widgets.themes import apply_dark_theme2
-
-
-if __name__ == "__main__":
+def main():
     import sys
+    from widgets.themes import apply_dark_theme2
     app = QApplication()
 
     extra = {
@@ -1473,13 +1481,13 @@ if __name__ == "__main__":
     
     window = PyVideoPlayer()
     window.show()
-    if len(sys.argv)>1:
-        print("argv:", sys.argv[1])
-        window.open(sys.argv[1])
-    else:
-        window.open_lut("../tests/resources/AlexaV3_K1S1_LogC2Video_Rec709_EE_aftereffects3d.cube")
-        window.open("../tests/resources/MASA_sequence/MASA_sequence_00196.jpg")
-        # window.open("../tests/resources/EF_VFX_04/EF_VFX_04_0094900.dpx")
-        
-        window.set_state(fps=24, memory_limit=1000)
+
+    window.open_lut("../tests/resources/AlexaV3_K1S1_LogC2Video_Rec709_EE_aftereffects3d.cube")
+    window.open("../tests/resources/MASA_sequence/MASA_sequence_00196.jpg")
+    # window.open("../tests/resources/EF_VFX_04/EF_VFX_04_0094900.dpx")
+    
+    window.set_state(fps=24, memory_limit=1000)
     app.exec_()
+
+if __name__ == "__main__":
+    main()

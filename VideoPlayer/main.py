@@ -42,9 +42,6 @@ from LUT import read_lut, apply_lut
 
 import mimetypes
 
-def evaluate(self, frame: int, image_path: str, downsample: int, lut_path: str, rect=None)->np.ndarray:
-    return pixels
-
 class Viewer2D(Viewer2D):
     valueChanged = Signal(int)
     minimumChanged = Signal(int)
@@ -235,19 +232,22 @@ class PyVideoPlayer(QWidget):
         # return np.zeros((256, 256, 3))
 
         with self.read_lock:
-            idx = ['full', 'half', 'quarter'].index(downsample)
-            factor = [1,2,4][idx]
-
+            # read
             begin = time.time()
             data = self._reader.read(frame)
             self.times['read'] = time.time()-begin
 
+            # resize
             begin = time.time()
+            idx = ['full', 'half', 'quarter'].index(downsample)
+            factor = [1,2,4][idx]
+
             data = cv2.resize(data, 
                 dsize=(data.shape[1]//factor, data.shape[0]//factor), 
                 interpolation=cv2.INTER_NEAREST)
             self.times['resize'] = time.time()-begin
 
+            # apply lut
             begin = time.time()
             if self._lut is not None and self.state['lut_enabled']:
                 data = apply_lut(data.astype(np.float32)/255, self._lut)*255
@@ -402,7 +402,7 @@ class PyVideoPlayer(QWidget):
 
     @inmain_decorator(wait_for_return=False)
     def set_state(self, **kwargs):
-        print("set state", kwargs.keys())
+        # print("set state", kwargs.keys())
         assert threading.current_thread() is threading.main_thread()
         self.state.update(kwargs)
 
@@ -1116,17 +1116,17 @@ class PyVideoPlayer(QWidget):
         self.fps_label.setFixedWidth(30)
         # bottom.layout().addWidget(self.fps_label)
 
-        self.oscilloscope = Oscilloscope()
-        self.oscilloscope.setMinimum(0)
-        self.oscilloscope.setMaximum(2/self.state['fps'])
+        self.oscilloscope = Oscilloscope(legend = ['read', 'resize', 'lut'])
+        # self.oscilloscope.setMinimum(0)
+        # self.oscilloscope.setMaximum(0.15)
 
         self.oscilloscope.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
         self.oscilloscope.resize(100,10)
 
-        @self.state_changed.connect
-        def update_oscilloscope(changes):
-            if 'fps' in changes:
-                self.oscilloscope.setMaximum(2/changes['fps'] if changes['fps'] else 120)
+        # @self.state_changed.connect
+        # def update_oscilloscope(changes):
+        #     if 'fps' in changes:
+        #         self.oscilloscope.setMaximum(2/changes['fps'] if changes['fps'] else 120)
 
         self.statusbar = QStatusBar()
         self.layout().addWidget(self.statusbar)
@@ -1408,8 +1408,7 @@ class PyVideoPlayer(QWidget):
                 dt = (timestamp-self.last_timestamp).total_seconds()
                 if dt>0:
                     self.fps_label.setText("{:.2f}".format(1/dt))
-                    times = [v for v in self.times.values()]+[dt]
-                    self.oscilloscope.push(*times)
+                    self.oscilloscope.push(*[v for v in self.times.values()])
 
             self.last_timestamp = timestamp
 
@@ -1419,11 +1418,11 @@ class PyVideoPlayer(QWidget):
         self.statusbar.showMessage(f"{1000/interval if interval>0 else 'inf'}")
         if self.state['playback'] in {"forward", "reverse"}:
             if not self.timer.isActive():
-                print("restart timer!", datetime.now())
+                # print("restart timer!", datetime.now())
                 self.timer.start(interval)
 
         if self.state['playback'] == "paused" and self.timer.isActive():
-            print("pause timer", datetime.now())
+            # print("pause timer", datetime.now())
             self.timer.stop()
 
         # update timer interval based on fps
@@ -1440,8 +1439,7 @@ class PyVideoPlayer(QWidget):
             lut = lut_path if lut_enabled else None
             if (frame, downsample, lut) not in self.state['cache']:
                 if self.timer.isActive():
-                    print("pause timer 2")
-
+                    # print("pause timer 2")
                     self.timer.stop()
 
             if (frame, downsample, lut) in self.state['cache']:
@@ -1450,7 +1448,7 @@ class PyVideoPlayer(QWidget):
 
         elif self.state['playback'] == "paused":
             if self.timer.isActive():
-                print("stop timer 2")
+                # print("stop timer 2")
                 self.timer.stop()
 
     def resizeEvent(self, event):

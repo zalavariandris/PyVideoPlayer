@@ -96,7 +96,7 @@ class Reader:
             self._width = int( self._cap.get(cv2.CAP_PROP_FRAME_WIDTH) )
             self._height = int( self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT) )
             
-    def read(self, frame: int)->Union[np.ndarray, None]:
+    def read(self, frame: int)->np.ndarray:
         if frame < self._first_frame:
             frame = self._first_frame
 

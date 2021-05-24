@@ -2,7 +2,23 @@ from PySide6.QtWidgets import *
 from PySide6.QtCore import *
 from PySide6.QtGui import *
 
-from utils import get_ranges
+def get_ranges(data):
+    result = []
+    if not data:
+        return result
+    idata = iter(sorted([int(v) for v in data]))
+    first = prev = next(idata)
+    for following in idata:
+        if following - prev == 1:
+            prev = following
+        else:
+            result.append((first, prev + 1))
+            first = prev = following
+    # There was either exactly 1 element and the loop never ran,
+    # or the loop just normally ended and we need to account
+    # for the last remaining range.
+    result.append((first, prev+1))
+    return result
 
 class CacheBar(QWidget):
     def __init__(self, parent=None):

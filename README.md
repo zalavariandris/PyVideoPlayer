@@ -1,6 +1,7 @@
 # PyVideoPlayer
 
-This is a simple work in progress image sequence player built with python3 pyside6 and opencv.
+This is a simple work in progress image sequence player built with python3 pyside6, opencv and OpenImageIO.
+
 
 ## TODO features
 - [x] open files directly with UI
@@ -30,6 +31,7 @@ This is a simple work in progress image sequence player built with python3 pysid
   - [x] create gui buttons to open, en enable lut
   - [x] add LUT to cache key
   - [x] apply lut with trilinear interpolation
+  - [ ] read 1D lut
   - [ ] use OpenColorIO for LUT
 - [ ] create exe
 - [ ] fullscreen
@@ -38,13 +40,25 @@ This is a simple work in progress image sequence player built with python3 pysid
 
 - [ ] give it a better name : )
 
+
+## compile apply_lut_cython
+> python setup.py build_ext --inplace
+
+
 ## TESTS TODO
-- [ ] open single file
+
 - [ ] first and last frame equal. Only a singlie frame. Test zoom with timeslider
 - [ ] drag and drop files with non-asci characters
+- [ ] Test FrameServer
+  - [ ] open single file
+  - [ ] open an video then open another one
+
 
 ## Build with PyInstaller
+
 > pyinstaller VideoPlayer/main.py
+
+> pyinstaller VideoPlayer/main.py --add-data "C:/Users/andris/AppData/Local/Programs/Python/Python39/Lib/site-packages/PySide6/plugins;PySide6/plugins/"
 
 ## How to build with nuitka
 > python -m nuitka --mingw64 VideoPlayer/main.py

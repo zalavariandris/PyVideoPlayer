@@ -16,7 +16,7 @@ class MySlider(QAbstractSlider):
         self.update()
 
     def mousePressEvent(self, event):
-        print("press")
+        # print("press")
         self._lastpos = event.pos()
         self._lastvalue = self.value()
         self._lastmin = self.minimum()
@@ -24,7 +24,7 @@ class MySlider(QAbstractSlider):
         if event.modifiers() == Qt.AltModifier or Qt.MiddleButton == event.button():
             self._is_panning = True
 
-        print("press", self._is_panning)
+        # print("press", self._is_panning)
         if self._is_panning:
             pass
         else:

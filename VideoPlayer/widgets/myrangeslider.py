@@ -165,9 +165,9 @@ class MyRangeSlider(QWidget):
 
         if event.type() == QEvent.MouseMove:
             delta = event.screenPos()-self._lastpos
-            print(delta)
+            # print(delta)
             delta_value = self._to_value(event.screenPos().x()) - self._to_value(self._lastpos.x())
-            print(delta_value)
+            # print(delta_value)
 
             if obj is self.span:
                 self.setValues(self._lastvalues[0]+delta_value, self._lastvalues[1]+delta_value)

@@ -1,10 +1,22 @@
 # PyVideoPlayer
 
-This is a simple work in progress image sequence player built with python3 pyside6, opencv and OpenImageIO.
+PyVideoPlayer is a work in progress video and image sequence player, with built in cache for realtime playback, and scrubbing.
+Built on top of OpenImageIO, OpenCV, PySide6 and python3.
+
+
+## Features
+- [x] support for a wide variety of image format includeing jpg, dpx, exr.
+- [x] support for movie format including h264
+- [x] export to mp4 with h264 encoding.
+- [x] export to jpeg sequence
+- [x] apply LUT (currently with CPU)
+- [ ] compare video side by side
+- [ ] annotations
+
 
 ![screenshot](./docs/screenshot.png)
 
-## TODO features
+## TODO
 - [x] open files directly with UI
 - [x] open video with *drag and drop*
 - [ ] open lut with *drag and drop*
@@ -42,7 +54,7 @@ This is a simple work in progress image sequence player built with python3 pysid
 - [ ] give it a better name : )
 
 
-## compile apply_lut_cython
+## Compile cython based LUT
 > python setup.py build_ext --inplace
 
 
@@ -57,13 +69,4 @@ This is a simple work in progress image sequence player built with python3 pysid
 
 ## Build with PyInstaller
 
-> pyinstaller VideoPlayer/main.py
-
-> pyinstaller VideoPlayer/main.py --add-data "C:/Users/andris/AppData/Local/Programs/Python/Python39/Lib/site-packages/PySide6/plugins;PySide6/plugins/"
-
-## How to build with nuitka
-> python -m nuitka --mingw64 VideoPlayer/main.py
-
-or standalone:
-
-> python -m nuitka --mingw64 --standalone --plugin-enable=numpy --plugin-enable=pyside6 VideoPlayer/main.py
+> pyinstaller VideoPlayer/main.py --add-data "C:/Users/{user}/AppData/Local/Programs/Python/Python39/Lib/site-packages/PySide6/plugins;PySide6/plugins/"

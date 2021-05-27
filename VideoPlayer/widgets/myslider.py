@@ -17,7 +17,7 @@ class MySlider(QAbstractSlider):
 
     def mousePressEvent(self, event):
         # print("press")
-        self._lastpos = event.pos()
+        self._lastpos = event.position()
         self._lastvalue = self.value()
         self._lastmin = self.minimum()
         self._lastmax = self.maximum()
@@ -28,7 +28,7 @@ class MySlider(QAbstractSlider):
         if self._is_panning:
             pass
         else:
-            val = self._to_value(event.pos().x())
+            val = self._to_value(event.position().x())
             self.setSliderPosition(val)
             if self.hasTracking():
                 self.setValue(val)
@@ -36,14 +36,14 @@ class MySlider(QAbstractSlider):
 
     def mouseMoveEvent(self, event):
         if self._is_panning:
-            delta = self._lastpos-event.pos()
+            delta = self._lastpos-event.position()
             new_min = self._to_value(self._to_pos(self._lastmin)+delta.x())
             new_max = self._to_value(self._to_pos(self._lastmax)+delta.x())
             self.setMinimum(new_min)
             self.setMaximum(new_max)
             self.update()
         else:
-            val = self._to_value(event.pos().x())
+            val = self._to_value(event.position().x())
             self.setSliderPosition(val)
             if self.hasTracking():
                 self.setValue(val)
@@ -53,7 +53,7 @@ class MySlider(QAbstractSlider):
         if self._is_panning:
             self._is_panning = False
         else:
-            self.setSliderPosition(self._to_value(event.pos().x()))
+            self.setSliderPosition(self._to_value(event.position().x()))
 
     def _to_pos(self, val):
         val-=self.minimum()
@@ -116,8 +116,12 @@ class MySlider(QAbstractSlider):
         text_rect = QRect(x1, 0, self.width()-1-x1, self.height())
         painter.drawText(text_rect, Qt.AlignLeft, str(self.sliderPosition()))
 
+        # option = QStyleOptionSpinBox()
+        # option.initFrom(self)
+        # self.style().drawPrimitive(QStyle.PE_IndicatorArrowRight, option, painter, self)
 
-        # painter.drawRect(x-thumb_size.width()/2, self.height()/2-thumb_size.height()/2, thumb_size.width(), thumb_size.height())
+
+        painter.drawRect(x-thumb_size.width()/2, self.height()/2-thumb_size.height()/2, thumb_size.width(), thumb_size.height())
 
         # draw background rect
         
@@ -174,5 +178,5 @@ if __name__ == "__main__":
     window.setMinimum(100)
     window.setMaximum(300)
     window.show()
-    app.exec_()
+    app.exec()
     os._exit(0)

@@ -2,6 +2,7 @@
 
 This is a simple work in progress image sequence player built with python3 pyside6, opencv and OpenImageIO.
 
+![screenshot](./docs/screenshot.png)
 
 ## TODO features
 - [x] open files directly with UI

@@ -147,6 +147,8 @@ class VideoPlayer(QWidget):
             'used_memory': 0,
         }
 
+        self.setWindowTitle("PyVideoPlayer")
+
         # Create and binf frameserver
         # ---------------------------
         self.frame_server = FrameServer()
@@ -982,12 +984,12 @@ class VideoPlayer(QWidget):
         # add oscilloscope to statusbar
         statusbar.addPermanentWidget(oscilloscope)
 
-        @self.state_changed.connect
-        def update_timer_interval(changes):
-            if 'fps' in changes:
-                # update fps label
-                interval = int(1000/changes['fps']) if changes['fps'] else 0
-                statusbar.showMessage(f"{1000/interval if interval>0 else 'inf'}")
+        # @self.state_changed.connect
+        # def update_timer_interval(changes):
+        #     if 'fps' in changes:
+        #         # update fps label
+        #         interval = int(1000/changes['fps']) if changes['fps'] else 0
+        #         statusbar.showMessage(f"{1000/interval if interval>0 else 'inf'}")
 
         return statusbar
 
@@ -1270,8 +1272,8 @@ def main():
     """Setup VideoPlayer"""
     window = VideoPlayer()
     window.show()
-    window.open_lut("../tests/resources/AlexaV3_K1S1_LogC2Video_Rec709_EE_aftereffects3d.cube")
-    window.open("../tests/resources/MASA_sequence/MASA_sequence_00196.jpg")
+    # window.open_lut("../tests/resources/AlexaV3_K1S1_LogC2Video_Rec709_EE_aftereffects3d.cube")
+    # window.open("../tests/resources/MASA_sequence/MASA_sequence_00196.jpg")
     # window.open("../tests/resources/EF_VFX_04/EF_VFX_04_0094900.dpx")
     window.set_state(fps=0, memory_limit=1000)
 

@@ -37,6 +37,52 @@ from dataclasses import dataclass
 
 from frame_server import FrameServer, ProcessDesc
 
+class HandleItem(QObject, QGraphicsItem):
+    positionChanged = Signal()
+    def __init__(self, parent=None):
+        QObject.__init__(self, parent=parent)
+        QGraphicsItem.__init__(self, parent=parent)
+        self.setFlags(QGraphicsItem.ItemIgnoresTransformations | QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.ItemSendsScenePositionChanges) 
+
+        self.setAcceptHoverEvents(True)
+        self.color = QColor(128, 128, 128)
+
+    def boundingRect(self):
+        return QRectF(-11,-11,22,22)
+
+    # def hoverEnterEvent(self, event):
+    #     self.color = QColor(255,255,255)
+    #     self.update()
+
+    # def hoverLeaveEvent(self, event):
+    #     self.color = QColor(128, 128, 128)
+    #     self.update()
+
+    # def mousePressEvent(self, event):
+    #     print("press")
+
+    # def mouseMoveEvent(self, event):
+    #     print("move")
+
+    def paint(self, painter, option, widget):
+        color = widget.palette().color(QPalette.PlaceholderText)
+        if option.state & QStyle.State_Selected:
+            color = widget.palette().color(QPalette.Text)
+        if option.state & QStyle.State_MouseOver:
+            color = widget.palette().color(QPalette.Text)
+        painter.setPen(QPen(color))
+        painter.drawRoundedRect(-5, -5, 10, 10, 0,0)
+
+        painter.drawLine(-10, 0, 10, 0)
+        painter.drawLine(0, -10, 0, 10)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            self.positionChanged.emit()
+            return value
+        return QGraphicsItem.itemChange(self, change, value)
+
 
 class Viewer2D(Viewer2D):
     """on righh mouse drag viewer acts as a frame dial"""
@@ -56,6 +102,8 @@ class Viewer2D(Viewer2D):
         self._last_value = None
 
         self._wrapping = False
+
+        self.setDragMode(QGraphicsView.RubberBandDrag)
 
     def setWrapping(self, val):
         self._wrapping = val
@@ -92,27 +140,54 @@ class Viewer2D(Viewer2D):
         self._value = val
         self.valueChanged.emit(val)
 
-    def mousePressEvent(self, event):
-        if event.button() == Qt.RightButton:
-            self._last_pos = event.pos()
-            self._last_value = self._value
-            self._is_scrubbing = True
-        else:
-            super().mousePressEvent(event)
+    def keyPressEvent(self, event):
+        # nudge selection
+        if self.scene().selectedItems():
+            delta = (0,0)
+            speed = 1.0
+            if event.modifiers() == Qt.ShiftModifier:
+                speed = 0.1
+            elif event.modifiers() == Qt.ControlModifier:
+                speed = 10.0
 
-    def mouseMoveEvent(self, event):
-        if self._is_scrubbing:
-            delta = event.pos() - self._last_pos
-            value = self._last_value + (delta.x()-delta.y())/10
-            self.setValue(value)
-        else:
-            super().mouseMoveEvent(event)
+            if event.key() == Qt.Key_Left:
+                delta = (-speed,0)
+            elif event.key() == Qt.Key_Right:
+                delta = (+speed,0)
+            elif event.key() == Qt.Key_Up:
+                delta = (0,-speed)
+            elif event.key() == Qt.Key_Down:
+                delta = (0,+speed)
 
-    def mouseReleaseEvent(self, event):
-        if self._is_scrubbing:
-            self._is_scrubbing = False
+            for item in self.scene().selectedItems():
+                item.moveBy(delta[0], delta[1])
         else:
-            super().mouseReleaseEvent(event)
+            super().keyPressEvent(event)
+            
+
+            # item.moveBy()
+
+    # def mousePressEvent(self, event):
+    #     if event.button() == Qt.RightButton:
+    #         self._last_pos = event.pos()
+    #         self._last_value = self._value
+    #         self._is_scrubbing = True
+    #     else:
+    #         super().mousePressEvent(event)
+
+    # def mouseMoveEvent(self, event):
+    #     if self._is_scrubbing:
+    #         delta = event.pos() - self._last_pos
+    #         value = self._last_value + (delta.x()-delta.y())/10
+    #         self.setValue(value)
+    #     else:
+    #         super().mouseMoveEvent(event)
+
+    # def mouseReleaseEvent(self, event):
+    #     if self._is_scrubbing:
+    #         self._is_scrubbing = False
+    #     else:
+    #         super().mouseReleaseEvent(event)
 
 
 class VideoPlayer(QWidget):
@@ -141,6 +216,11 @@ class VideoPlayer(QWidget):
             'lut_path': None,
             'lut_enabled': False,
 
+            'topleft': None,
+            'topright': None,
+            'bottomright': None,
+            'bottomleft': None,
+
             # computed
             'image': None,
             'downsample': 'full', # full half | quarter
@@ -155,7 +235,7 @@ class VideoPlayer(QWidget):
         # watch changes to request frames
         @self.state_changed.connect
         def request_frame_on_change(changes):
-            if any(key in changes for key in ['frame', 'path', 'downsample', 'lut_enabled', 'lut_path']):
+            if any(key in changes for key in ['topleft', 'topright', 'bottomright', 'bottomleft', 'frame', 'path', 'downsample', 'lut_enabled', 'lut_path']):
                 key = self.make_key()
                 if key.is_valid():
                     self.frame_server.request_frame(self.make_key())
@@ -174,6 +254,8 @@ class VideoPlayer(QWidget):
 
         # init gui
         self.init_gui()
+        self._is_fullscreen = False
+
 
     # STATE
 
@@ -181,9 +263,18 @@ class VideoPlayer(QWidget):
     def set_state(self, **kwargs):
         # print("set state", kwargs.keys())
         assert threading.current_thread() is threading.main_thread()
-        self.state.update(kwargs)
 
-        changes = kwargs.copy()
+        # self.state.update(kwargs)
+
+        # keep changes that actually changed
+        changes = dict()
+        for key, value in kwargs.items():
+            try:
+                if self.state[key] != value:
+                    changes[key] = value
+            except ValueError: # in case fore example it's an array
+                if self.state[key] is not value:
+                    changes[key] = value
 
         if 'range' in changes:
             assert isinstance(changes['range'][0], int)
@@ -192,13 +283,18 @@ class VideoPlayer(QWidget):
             if changes['range'][0]>changes['range'][1]:
                 del changes['range']
 
+        if 'zoom' in changes:
+            print("zoom changed")
+            if changes['zoom'] == 'fit':
+                self.fit()
+
         # Calculate computed properties
         # -----------------------------
 
         # watch 'path' update range, fpr and clear cache
         if "path" in changes:
             # update reader
-            self._reader = Reader(self.state['path'])
+            self._reader = Reader(changes['path'])
 
             # update range
             changes['range'] = (self._reader.first_frame, self._reader.last_frame)
@@ -213,6 +309,10 @@ class VideoPlayer(QWidget):
 
 
             changes['zoom'] = "fit"
+            changes['topleft'] = (0,0)
+            changes['topright'] = (self._reader.width, 0)
+            changes['bottomright'] = (self._reader.width, self._reader.height)
+            changes['bottomleft'] = (0, self._reader.height)
 
 
         # if "lut_path" in changes:
@@ -277,6 +377,7 @@ class VideoPlayer(QWidget):
         
         # emit change signal
         # ------------------
+        print('changes:', [key for key in changes])
         self.state_changed.emit(changes)
 
     def make_key(self):
@@ -288,7 +389,19 @@ class VideoPlayer(QWidget):
         lut = lut_path if lut_enabled else None
         key = (frame, downsample, lut)
 
-        desc = ProcessDesc(path=path, frame=frame, downsample=downsample, lut=lut)
+        corners = None
+        if (self.state['topleft'] is not None and 
+            self.state['topright'] is not None and 
+            self.state['bottomright'] is not None and 
+            self.state['bottomleft'] is not None):
+            corners = (
+                self.state['topleft'],
+                self.state['topright'],
+                self.state['bottomright'],
+                self.state['bottomleft'],
+                )
+
+        desc = ProcessDesc(path=path, frame=frame, downsample=downsample, lut=lut, corners=corners)
         return desc
         return desc if desc.is_valid() else None
 
@@ -330,6 +443,7 @@ class VideoPlayer(QWidget):
         toggle_play_action.setCheckable(True)
         toggle_play_action.setShortcutContext(Qt.ApplicationShortcut)
         toggle_play_action.setShortcut(QKeySequence(Qt.Key_Space))
+        self.addAction(toggle_play_action)
 
         set_inpoint_action = QAction("set in point", self)
         set_inpoint_action.setShortcutContext(Qt.ApplicationShortcut)
@@ -361,15 +475,20 @@ class VideoPlayer(QWidget):
         clear_cache_action.triggered.connect(lambda: self.frame_server.clear_cache())
 
         fullscreen_action = QAction("fullscreen", self)
+        fullscreen_action.setCheckable(True)
         fullscreen_action.setShortcutContext(Qt.ApplicationShortcut)
-        fullscreen_action.triggered.connect(self.toggleFullscreen)
+        @fullscreen_action.triggered.connect
+        def toggle_fullscreen():
+            self.setFullscreen(not self._is_fullscreen)
         fullscreen_action.setShortcutContext(Qt.ApplicationShortcut)
         fullscreen_action.setShortcut("u")
+        self.addAction(fullscreen_action)
 
         fit_action = QAction("fit", self)
         fit_action.setShortcutContext(Qt.ApplicationShortcut)
         fit_action.setShortcut(QKeySequence(Qt.Key_Backspace))
-        fit_action.triggered.connect(self.fit)
+        fit_action.triggered.connect(lambda: self.set_state(zoom="fit"))
+        self.addAction(fit_action)
 
         # Menu
         # ----
@@ -536,6 +655,69 @@ class VideoPlayer(QWidget):
         resolution_textitem.setFlags(QGraphicsItem.ItemIgnoresTransformations) 
         image_scene.addItem(resolution_textitem)
 
+        # Corner pin handles
+        topleft_handle = HandleItem()
+        image_scene.addItem(topleft_handle)
+        @topleft_handle.positionChanged.connect
+        def _():
+            pos = topleft_handle.scenePos()
+            if (pos.x(), pos.y()) != self.state['topleft']:
+                print("boom", pos.x(), self.state['topleft'][0])
+                self.set_state(topleft=(pos.x(), pos.y()))
+
+        @self.state_changed.connect
+        def _(changes):
+            if 'topleft' in changes:
+                x, y = changes['topleft']
+                if x!= topleft_handle.pos().x() or y != topleft_handle.pos().y():
+                    topleft_handle.setPos(x, y)
+
+
+        topright_handle = HandleItem()
+        image_scene.addItem(topright_handle)
+        @topright_handle.positionChanged.connect
+        def _():
+            pos = topright_handle.scenePos()
+            if (pos.x(), pos.y()) != self.state['topright']:
+                self.set_state(topright=(pos.x(), pos.y()))
+
+        @self.state_changed.connect
+        def _(changes):
+            if 'topright' in changes:
+                x, y = changes['topright']
+                if x!= topright_handle.pos().x() or y != topright_handle.pos().y():
+                    topright_handle.setPos(x, y)
+
+        bottomright_handle = HandleItem()
+        image_scene.addItem(bottomright_handle)
+        @bottomright_handle.positionChanged.connect
+        def _():
+            pos = bottomright_handle.scenePos()
+            if (pos.x(), pos.y()) != self.state['bottomright']:
+                self.set_state(bottomright=(pos.x(), pos.y()))
+
+        @self.state_changed.connect
+        def _(changes):
+            if 'bottomright' in changes:
+                x, y = changes['bottomright']
+                if x!= bottomright_handle.pos().x() or y != bottomright_handle.pos().y():
+                    bottomright_handle.setPos(x, y)
+
+        bottomleft_handle = HandleItem()
+        image_scene.addItem(bottomleft_handle)
+        @bottomleft_handle.positionChanged.connect
+        def _():
+            pos = bottomleft_handle.scenePos()
+            if (pos.x(), pos.y()) != self.state['bottomleft']:
+                self.set_state(bottomleft=(pos.x(), pos.y()))
+
+        @self.state_changed.connect
+        def _(changes):
+            if 'bottomleft' in changes:
+                x, y = changes['bottomleft']
+                if x!= bottomleft_handle.pos().x() or y != bottomleft_handle.pos().y():
+                    bottomleft_handle.setPos(x, y)
+
         @self.state_changed.connect
         def sync_resolution_label(changes):
             if 'image' in changes:
@@ -562,18 +744,7 @@ class VideoPlayer(QWidget):
             if 'zoom' in changes:
                 if changes['zoom'] == "fit":
                     if self.state['image'] is not None:
-                        height, width, channels = self.state['image'].shape
-                        if self.state['downsample'] == "full":
-                            pass
-                        elif self.state['downsample'] == "half":
-                            width, height = width*2, height*2
-                        elif self.state['downsample'] == "quarter":
-                            width, height = width*4, height*4
-                        else:
-                            raise NotImplementedError
-                        rect = QRect(0, 0, width, height)
-
-                        image_viewer.fitInView(rect, Qt.KeepAspectRatio)
+                        self.fit()
 
                 elif image_viewer.zoom() != changes['zoom']:
                     if isinstance(changes['zoom'], numbers.Number):
@@ -584,18 +755,7 @@ class VideoPlayer(QWidget):
         @self.state_changed.connect
         def fit_when_image_changed(changes):
             if 'image' in changes and changes['image'] is not None and self.state['zoom'] == "fit":
-                height, width, channels = self.state['image'].shape
-                if self.state['downsample'] == "full":
-                    pass
-                elif self.state['downsample'] == "half":
-                    width, height = width*2, height*2
-                elif self.state['downsample'] == "quarter":
-                    width, height = width*4, height*4
-                else:
-                    raise NotImplementedError
-                rect = QRect(0, 0, width, height)
-                image_viewer.fitInView(QRect(0, 0, width, height), Qt.KeepAspectRatio)
-
+                self.fit()
         # connect viewer as a framedial to scrub with rightmouse button
         image_viewer.setWrapping(True)
         @image_viewer.valueChanged.connect
@@ -993,6 +1153,29 @@ class VideoPlayer(QWidget):
 
         return statusbar
 
+    def setFullscreen(self, value):
+        print("set fullscreen", value)
+        if self._is_fullscreen is value:
+            return
+
+        if self._is_fullscreen:
+            idx = self.layout().indexOf(self._central_widget)
+            assert idx>0
+            for i in range(self.layout().count()):
+                if i!=idx:
+                    self.layout().itemAt(i).widget().show()
+            # self.setWindowState(Qt.ActiveWindow)
+            self.showNormal()
+            self._is_fullscreen = False
+        else:
+            idx = self.layout().indexOf(self._central_widget)
+            assert idx>0
+            for i in range(self.layout().count()):
+                if i!=idx:
+                    self.layout().itemAt(i).widget().hide()
+            self.showFullScreen()
+            self._is_fullscreen = True
+
     def init_gui(self)->None:
         # View
         # ----
@@ -1020,6 +1203,7 @@ class VideoPlayer(QWidget):
 
         image_viewer = self.create_image_viewer()
         self.layout().addWidget(image_viewer)
+        self._central_widget = image_viewer
 
         time_controls = self.create_time_controls()
         self.layout().addWidget(time_controls)
@@ -1188,7 +1372,7 @@ class VideoPlayer(QWidget):
             duration = last_frame-first_frame
             fps = self.state['fps']
             lut = self.state['lut_path'] if self.state['lut_enabled'] else None
-            process_desc = ProcessDesc(path=self.state['path'], frame=first_frame, downsample="full", lut=lut)
+            process_desc = ProcessDesc(frame=first_frame, path=self.state['path'], downsample="full", lut=lut)
             height, width, channels = self.evaluate(process_desc).shape
 
             IsSequence = ext == ".jpg"
@@ -1198,7 +1382,7 @@ class VideoPlayer(QWidget):
                 for frame in range(first_frame, last_frame+1):
                     progress = int(100*(frame-first_frame)/(last_frame-first_frame))
 
-                    process_desc = ProcessDesc(path=self.state['path'], frame=frame, downsample="full", lut=lut)
+                    process_desc = ProcessDesc(frame=frame, path=self.state['path'], downsample="full", lut=lut)
                     rgb = self.evaluate(process_desc).copy()
                     assert rgb.shape == (height, width, channels)
                     # bgr = rgb[...,::-1].copy()
@@ -1228,7 +1412,7 @@ class VideoPlayer(QWidget):
                 writer = cv2.VideoWriter(filename,fourcc, fps or 24, (width, height))
                 for frame in range(first_frame, last_frame+1):
                     progress = int(100*(frame-first_frame)/(last_frame-first_frame))
-                    process_desc = ProcessDesc(path=self.state['path'], frame=frame, downsample="full", lut=lut)
+                    process_desc = ProcessDesc(frame=frame, path=self.state['path'], downsample="full", lut=lut)
                     rgb = self.evaluate(process_desc).copy()
                     bgr = rgb[...,::-1].copy()
 
@@ -1244,19 +1428,20 @@ class VideoPlayer(QWidget):
 
         the_thread = threading.Thread(target=run, daemon=True).start()
 
-    def toggleFullscreen(self):
-        raise NotImplementedError
-        # if self.dialog.isVisible():
-        #     self.layout().addWidget(image_viewer)
-        #     self.dialog.hide()
-        # else:
-        #     self.dialog.show()
-        #     self.dialog.setWindowState(Qt.WindowFullScreen)
-        #     self.dialog.layout().addWidget(image_viewer)
-
     def fit(self):
         # image in viewer
-        self.set_state(zoom="fit")
+        height, width, channels = self.state['image'].shape
+        if self.state['downsample'] == "full":
+            pass
+        elif self.state['downsample'] == "half":
+            width, height = width*2, height*2
+        elif self.state['downsample'] == "quarter":
+            width, height = width*4, height*4
+        else:
+           raise NotImplementedError
+        rect = QRect(0, 0, width, height)
+
+        self._central_widget.fitInView(rect, Qt.KeepAspectRatio)
 
 
 def main():
@@ -1273,7 +1458,7 @@ def main():
     window = VideoPlayer()
     window.show()
     # window.open_lut("../tests/resources/AlexaV3_K1S1_LogC2Video_Rec709_EE_aftereffects3d.cube")
-    # window.open("../tests/resources/MASA_sequence/MASA_sequence_00196.jpg")
+    window.open("../tests/resources/MASA_sequence/MASA_sequence_00196.jpg")
     # window.open("../tests/resources/EF_VFX_04/EF_VFX_04_0094900.dpx")
     window.set_state(fps=0, memory_limit=1000)
 

@@ -17,8 +17,7 @@ class Viewer2D(QGraphicsView):
             self.grabGesture(gesture)
 
         # crate temporary scene
-        self.scene = QGraphicsScene()
-        self.setScene(self.scene)
+        self.setScene(QGraphicsScene())
         self.setSceneRect(-sys.maxsize/4, -sys.maxsize/4, sys.maxsize/2, sys.maxsize/2) # x, y, w, h
 
 

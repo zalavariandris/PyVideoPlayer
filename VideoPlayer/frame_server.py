@@ -14,10 +14,11 @@ from typing import Iterable
 
 @dataclass(frozen=True)
 class ProcessDesc:
-    path: str
     frame: int
-    downsample: str
-    lut: str
+    path: str
+    downsample: str = None
+    lut: str = None
+    corners: tuple = None
 
     def is_valid(self):
         return (isinstance(self.path, str) and Path(self.path).exists() and 
@@ -34,8 +35,6 @@ def read_lut_cached(lut_path):
 def create_reader_cached(path):
     return Reader(path)
 
-
-
 class FrameServer(QObject):
     cache_changed = Signal()
     frame_done = Signal(ProcessDesc)
@@ -51,7 +50,8 @@ class FrameServer(QObject):
         self.memory_limit = 100 #MB
 
         self._cache = dict()
-        self._requested_frames = []
+        self._deep_cache = dict() # cache individual stages on the current frame only
+        self._requested_frame = None
 
         self.worker = threading.Thread(target=self.preload, daemon=True)
         self.running = True
@@ -66,6 +66,10 @@ class FrameServer(QObject):
         # self._current_image = None
 
     def evaluate(self, key:ProcessDesc, rect=None)->np.ndarray:
+
+        self._deep_cache = {k:v for k, v in self._deep_cache.items() if key.frame==key.frame}
+
+        # print("evaluate", key)
         if key.path is None:
             return None
             # raise Exception("invalid process description")
@@ -76,27 +80,81 @@ class FrameServer(QObject):
         if key.lut is not None:
             self._lut = read_lut_cached(key.lut).astype(np.float32)
 
+        # Read
         with self.lock:
-            # read
-            begin = time.time()
-            data = self._reader.read(key.frame).astype(np.float32)/255
-            self.times['read'] = time.time()-begin
+            stage_key = ProcessDesc(frame=key.frame, path=key.path)
+            if stage_key in self._deep_cache:
+                data = self._deep_cache[stage_key]
+            else:
+                print("Read", key)
+                begin = time.time()
+                data = self._reader.read(key.frame).astype(np.float32)/255
+                self._deep_cache[stage_key] = data
+                self.times['read'] = time.time()-begin
 
-            # resize
-            begin = time.time()
-            idx = ['full', 'half', 'quarter'].index(key.downsample)
-            factor = [1,2,4][idx]
+        if key != self._requested_frame:
+            print("cancel eval")
+            return None
 
-            data = cv2.resize(data, 
-                dsize=(data.shape[1]//factor, data.shape[0]//factor), 
-                interpolation=cv2.INTER_NEAREST)
+        # Resize
+        with self.lock:
+            begin = time.time()
+            stage_key = ProcessDesc(frame=key.frame, path=key.path, downsample=key.downsample)
+            if stage_key in self._deep_cache:
+                data = self._deep_cache[stage_key]
+            else:
+                print("Resize", key)
+                idx = ['full', 'half', 'quarter'].index(key.downsample)
+                factor = [1,2,4][idx]
+
+                data = cv2.resize(data, 
+                    dsize=(data.shape[1]//factor, data.shape[0]//factor), 
+                    interpolation=cv2.INTER_NEAREST)
+
+                self._deep_cache[stage_key] = data
             self.times['resize'] = time.time()-begin
 
-            # apply lut
-            begin = time.time()
-            if self._lut is not None and key.lut is not None:
-                data = apply_lut(data, self._lut)
-            self.times['lut'] = time.time()-begin
+        if key != self._requested_frame:
+            print("cancel eval")
+            return None
+
+        # Apply Lut
+        with self.lock:
+            stage_key = ProcessDesc(frame=key.frame, path=key.path, downsample=key.downsample, lut=key.lut)
+            if stage_key in self._deep_cache:
+                data = self._deep_cache[stage_key]
+            else:
+                begin = time.time()
+                print("ApplyLut", key)
+                if self._lut is not None and key.lut is not None:
+                    data = apply_lut(data, self._lut)
+                    self._deep_cache[stage_key] = data
+                self.times['lut'] = time.time()-begin
+
+        if key != self._requested_frame:
+            print("cancel eval")
+            return None
+
+        # Corner Pin
+        with self.lock:
+            if key.corners is not None:
+                stage_key = ProcessDesc(frame=key.frame, path=key.path, downsample=key.downsample, lut=key.lut, corners=key.corners)
+                if stage_key in self._deep_cache:
+                    data = self._deep_cache[stage_key]
+                else:
+                    print("CornerPin", key)
+                    begin = time.time()
+                    h,w,c = data.shape
+                    src_pts = np.array([(0,0),(w,0),(w,h),(0,h)], dtype=np.float32)
+                    dst_pts = np.array(key.corners, dtype=np.float32)
+                    M = cv2.getPerspectiveTransform(src_pts, dst_pts)
+                    data = cv2.warpPerspective(data, M, (w,h))
+                    self._deep_cache[stage_key] = data
+                    self.times['cornerpin'] = time.time()-begin
+
+        if key != self._requested_frame:
+            print("cancel eval")
+            return None
 
         return (data*255).astype(np.uint8)
 
@@ -108,7 +166,8 @@ class FrameServer(QObject):
 
     def preload(self)->None:
         while self.running:
-            time.sleep(0.00000001)
+            # time.sleep(1/60)
+            time.sleep(0.000001)
 
             while self.used_memory() > self.memory_limit and self.running:
                 # find oldest cache item
@@ -128,13 +187,12 @@ class FrameServer(QObject):
                 # if oldest_key == self._current_frame:
                 #     self.image_changed.emit()
 
-            if self._requested_frames and self.running:
-                key = self._requested_frames.pop()
-
-
+            if self._requested_frame and self.running:
+                key = self._requested_frame
                 # print("preload frame", frame, threading.current_thread())
-                
                 img = self.evaluate(key)
+                if img is not None:
+                    self._requested_frame = None
 
                 if img is not None:
                     with self.lock:
@@ -160,11 +218,14 @@ class FrameServer(QObject):
         else:
             # self._current_frame = key
             # print("request processing frame")
-            self._requested_frames = [key]
+            self._requested_frame = key
 
     def __getitem__(self, key:ProcessDesc)->np.ndarray:
-        pixels, timestamp = self._cache[key]
-        return pixels
+        try:
+            pixels, timestamp = self._cache[key]
+            return pixels
+        except KeyError:
+            return None
 
     def __contains__(self, key:ProcessDesc)->bool:
         return key in self._cache
